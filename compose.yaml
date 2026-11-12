@@ -1,0 +1,33 @@
+services:
+  satchel:
+    build: .
+    image: satchel:local
+    container_name: satchel
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      SATCHEL_HOST: 0.0.0.0
+      SATCHEL_DATA: /data
+    ports:
+      # Loopback only. Reach it from other machines through a tunnel or reverse proxy.
+      - "127.0.0.1:8787:8787"
+    volumes:
+      # Bind mount: easy to back up and to edit by hand. The directory must be writable by uid 1000.
+      - ${SATCHEL_DATA_DIR:-./data}:/data
+      # Or use a named volume instead: replace the line above with "satchel-data:/data"
+      # and uncomment the volumes block at the bottom.
+
+  # Simplest tunnel: a cloudflared sidecar. Create a tunnel in Zero Trust, add a public
+  # hostname pointing at http://satchel:8787, and put the tunnel token in .env.
+  # Not needed if the host already runs cloudflared or another reverse proxy.
+  # cloudflared:
+  #   image: cloudflare/cloudflared:latest   # pin a version in real use
+  #   restart: unless-stopped
+  #   command: tunnel --no-autoupdate run
+  #   environment:
+  #     TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
+  #   depends_on:
+  #     - satchel
+
+# volumes:
+#   satchel-data:

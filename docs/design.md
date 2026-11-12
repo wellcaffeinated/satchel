@@ -129,8 +129,7 @@ Rules text (final wording belongs in `src/server/`, keep it short):
 
 ### Tools
 
-All tools return text content written for a model to read (compact, no JSON dumps),
-plus `structuredContent` where the SDK makes that cheap.
+All tools return text content written for a model to read (compact, no JSON dumps).
 
 | Tool | Input | Result |
 |---|---|---|
@@ -142,11 +141,27 @@ plus `structuredContent` where the SDK makes that cheap.
 
 Topic names are lowercase kebab-case, at most 32 characters.
 
+Details settled during the first build:
+
+- `scope: project` requires `project`; `scope: host` requires `host`.
+- `recall` without `project` searches every project's memories; with `project` it
+  excludes other projects' project-scoped memories. An unknown `topic` returns nothing.
+- `topic_trigger` on an existing topic is ignored.
+- Checkpoints are shown by `brief`, not `recall`.
+- Limits: project, host and branch 200 characters; commit one token of at most 64;
+  checkpoint summary 3,000.
+- The transport is stateless, so the writer's name from `initialize` is carried in the
+  `Mcp-Session-Id` value and read back on later requests. It is a label, not a credential.
+- Tool results are text only, with no `structuredContent`, because some clients show the
+  structured form to the model in place of the text.
+
 ### REST endpoints (for hooks and scripts)
 
 Same authentication as `/mcp`. Plain-text responses so shell hooks need no JSON parser.
 
-- `GET /api/brief?project=&branch=` : same text as the `brief` tool.
+- `GET /api/brief?project=&branch=` : same text as the `brief` tool. When there is a
+  checkpoint for the requested branch, the text contains a line of the exact form
+  `checkpoint-commit: <hash>`, which the plugin's session-start hook reads.
 - `POST /api/checkpoint` : JSON body with the `checkpoint` tool's fields. `204` on success.
 - `GET /healthz` : unauthenticated, returns `ok`.
 
@@ -198,6 +213,35 @@ no detail about why.
 | `CF_ACCESS_TEAM_DOMAIN` | unset | e.g. `example.cloudflareaccess.com` |
 | `CF_ACCESS_AUD` | unset | Access application audience tag |
 | `SATCHEL_AUTH` | unset | `none` to disable auth on loopback |
+
+## Feedback loop for agents (planned, built after the first server runs)
+
+An agent changing Satchel needs to see the effect of a change without a deployed server
+or a human in the loop. Three pieces, all runnable from the repo with no network once
+the embedding model is cached:
+
+1. **`pnpm sandbox`**: starts the real server on a random loopback port against a
+   temporary data directory seeded from `fixtures/memories/` (a few dozen realistic
+   memories across topics, scopes and projects), prints the URL and a token, and removes
+   the directory on exit. `--keep` leaves it for inspection.
+2. **`pnpm mcp <tool> '<json args>'`**: a thin command-line MCP client built on the SDK.
+   It connects to a running server (the sandbox by default), prints the `instructions`
+   it received with their character count, calls one tool, and prints the result exactly
+   as a model would see it. `pnpm mcp --list` prints the tool names and descriptions with
+   their character counts. This is how an agent checks wording, limits and tool output.
+3. **`pnpm eval`**: retrieval scoring. `fixtures/queries.yaml` holds cases of the form
+   `{ query, project?, expect: [memory ids], reject?: [ids] }`, including paraphrases that
+   share no keywords with their target. The command runs every case in three modes
+   (full-text only, vectors only, fused) and prints recall@3, recall@8 and mean
+   reciprocal rank per mode, then the failing cases with what was returned instead.
+   `--model <id>` runs the same cases with another embedding model so models can be
+   compared before switching. It also scores duplicate detection: pairs of near-duplicate
+   facts that `remember` should report as similar, and unrelated pairs it should not.
+
+Rules for the loop: the eval prints numbers, it does not gate CI, because a threshold on
+a few dozen cases would be noise. A change to ranking, the FTS query builder, the
+embedding model or the similarity cutoff must quote the before and after numbers in its
+commit message. When a real recall misses in daily use, add it as a case first.
 
 ## Not built yet
 

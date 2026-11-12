@@ -1,0 +1,12 @@
+{
+  "name": "satchel-plugins",
+  "description": "Claude Code integration for the Satchel memory server",
+  "owner": { "name": "wellcaffeinated" },
+  "plugins": [
+    {
+      "name": "satchel",
+      "source": "./plugin",
+      "description": "MCP connection, session-start brief, commit checkpoints and usage skill for Satchel"
+    }
+  ]
+}

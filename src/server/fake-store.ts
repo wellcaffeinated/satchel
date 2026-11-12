@@ -1,0 +1,169 @@
+// In-memory Store for server tests. Mirrors the contract in src/types.ts, nothing more.
+import {
+  type Checkpoint,
+  type CheckpointInput,
+  type Memory,
+  type RecallInput,
+  type RememberInput,
+  SatchelError,
+  type Store,
+  type Topic,
+} from '../types.ts'
+
+const FIXED_TIME = '2026-11-12T18:04:00Z'
+
+export interface FakeStoreSeed {
+  core?: string
+  topics?: Record<string, { trigger: string }>
+  memories?: Memory[]
+  checkpoints?: Checkpoint[]
+}
+
+export interface FakeStore extends Store {
+  readonly recallLog: Array<{ id: string; client: string }>
+  readonly memories: Map<string, Memory>
+  readonly checkpointsByKey: Map<string, Checkpoint>
+  closed(): boolean
+}
+
+function idGenerator(prefix: string) {
+  const counter = { value: 0 }
+  return () => {
+    counter.value += 1
+    return `${prefix}_${String(counter.value).padStart(8, '0')}`
+  }
+}
+
+function checkpointKey(project: string, branch: string): string {
+  return `${project}\u0000${branch}`
+}
+
+function matchesQuery(memory: Memory, query: string | undefined): boolean {
+  if (query === undefined) return true
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean)
+  return words.some((word) => memory.text.toLowerCase().includes(word))
+}
+
+export function createFakeStore(seed: FakeStoreSeed = {}): FakeStore {
+  const coreText = seed.core ?? ''
+  const triggers = new Map(Object.entries(seed.topics ?? {}).map(([n, t]) => [n, t.trigger]))
+  const memories = new Map((seed.memories ?? []).map((m) => [m.id, m]))
+  const checkpointsByKey = new Map(
+    (seed.checkpoints ?? []).map((c) => [checkpointKey(c.project, c.branch), c]),
+  )
+  const recallLog: Array<{ id: string; client: string }> = []
+  const nextMemoryId = idGenerator('m')
+  const nextCheckpointId = idGenerator('c')
+  const state = { closed: false }
+
+  const countIn = (topic: string) => [...memories.values()].filter((m) => m.topic === topic).length
+
+  const unknownTopic = (topic: string) =>
+    new SatchelError(
+      'unknown_topic',
+      `Unknown topic "${topic}". Existing topics: ${[...triggers.keys()].join(', ')}. ` +
+        'Pick one, or pass topic_trigger to create it.',
+    )
+
+  async function topics(): Promise<Topic[]> {
+    const all = [...triggers].map(([name, trigger]) => ({ name, trigger, count: countIn(name) }))
+    return all.toSorted((a, b) => b.count - a.count)
+  }
+
+  async function recall(input: RecallInput): Promise<Memory[]> {
+    if (input.topic !== undefined && !triggers.has(input.topic)) throw unknownTopic(input.topic)
+    const visible = (m: Memory) =>
+      m.scope !== 'project' || input.project === undefined || m.project === input.project
+    const found = [...memories.values()]
+      .filter((m) => input.topic === undefined || m.topic === input.topic)
+      .filter((m) => matchesQuery(m, input.query))
+      .filter(visible)
+      .slice(0, input.limit ?? 8)
+    recallLog.push(...found.map((m) => ({ id: m.id, client: input.client })))
+    return found
+  }
+
+  async function remember(input: RememberInput) {
+    if (!triggers.has(input.topic)) {
+      if (!input.topicTrigger) throw unknownTopic(input.topic)
+      triggers.set(input.topic, input.topicTrigger)
+    }
+    const previous = input.replaces ? memories.get(input.replaces) : undefined
+    if (input.replaces && !previous) {
+      throw new SatchelError('not_found', `No memory ${input.replaces}.`)
+    }
+    const memory: Memory = {
+      id: previous?.id ?? nextMemoryId(),
+      topic: input.topic,
+      scope: input.scope ?? 'global',
+      project: input.project,
+      host: input.host,
+      created: previous?.created ?? FIXED_TIME,
+      updated: FIXED_TIME,
+      source: input.source,
+      text: input.text,
+    }
+    const similar = [...memories.values()]
+      .filter((m) => m.id !== memory.id && m.topic === memory.topic)
+      .slice(0, 3)
+    memories.set(memory.id, memory)
+    return { memory, similar }
+  }
+
+  async function forget(id: string): Promise<void> {
+    if (memories.delete(id)) return
+    const key = [...checkpointsByKey].find(([, c]) => c.id === id)?.[0]
+    if (key === undefined) throw new SatchelError('not_found', `No memory or checkpoint ${id}.`)
+    checkpointsByKey.delete(key)
+  }
+
+  async function checkpoint(input: CheckpointInput): Promise<Checkpoint> {
+    const key = checkpointKey(input.project, input.branch)
+    const previous = checkpointsByKey.get(key)
+    const saved: Checkpoint = {
+      id: previous?.id ?? nextCheckpointId(),
+      project: input.project,
+      branch: input.branch,
+      commit: input.commit,
+      updated: FIXED_TIME,
+      source: input.source,
+      summary: input.summary ?? previous?.summary ?? '',
+    }
+    checkpointsByKey.set(key, saved)
+    return saved
+  }
+
+  async function dropCheckpoint(project: string, branch: string): Promise<void> {
+    checkpointsByKey.delete(checkpointKey(project, branch))
+  }
+
+  async function checkpoints(project: string, branch?: string): Promise<Checkpoint[]> {
+    return [...checkpointsByKey.values()].filter(
+      (c) => c.project === project && (branch === undefined || c.branch === branch),
+    )
+  }
+
+  async function projectMemoryCount(project: string): Promise<number> {
+    return [...memories.values()].filter((m) => m.scope === 'project' && m.project === project)
+      .length
+  }
+
+  return {
+    recallLog,
+    memories,
+    checkpointsByKey,
+    closed: () => state.closed,
+    core: async () => coreText,
+    topics,
+    recall,
+    remember,
+    forget,
+    checkpoint,
+    dropCheckpoint,
+    checkpoints,
+    projectMemoryCount,
+    close: async () => {
+      state.closed = true
+    },
+  }
+}

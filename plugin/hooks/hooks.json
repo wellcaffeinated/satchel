@@ -1,0 +1,41 @@
+{
+  "description": "Satchel: session brief, hash-only checkpoint after git commit, session-end stub",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/session-start.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git commit *)",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/commit-checkpoint.sh\"",
+            "async": true,
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/session-end.sh\"",
+            "timeout": 2
+          }
+        ]
+      }
+    ]
+  }
+}
