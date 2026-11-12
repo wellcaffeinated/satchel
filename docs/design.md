@@ -1,0 +1,208 @@
+# Satchel design
+
+Satchel is a self-hosted memory service for AI agents. One server holds one person's
+memories and serves them to any MCP client. This file is the contract the code is built
+against; when code and this file disagree, fix one of them in the same change.
+
+## Goals
+
+- One store, reachable from every agent the owner uses (Claude Code, claude.ai, Claude
+  Desktop and mobile, Hermes, anything else that speaks MCP).
+- A small, fixed-size start-of-session load that tells an agent what it can look up.
+- Agents decide when to save; the owner never has to review, but can browse and edit.
+- Plain files as the source of truth. Everything else is a cache that can be rebuilt.
+- Standard protocols only in the server: MCP over Streamable HTTP. Nothing in `src/` is
+  specific to one client. Client-specific glue lives in `plugin/`.
+- Runs as one Docker container with one mounted volume.
+
+## The three tiers
+
+1. **Core**: `core.md`, standing facts and preferences that apply everywhere. Hard cap
+   `CORE_MAX_CHARS` (4,000). Loaded by `brief`.
+2. **Map**: one line per topic: name, trigger ("read before ..."), memory count. Rendered
+   from `topics.yaml` plus counts. Loaded in MCP `instructions` and by `brief`.
+3. **Memories**: one fact per file, fetched only through `recall`.
+
+A **checkpoint** records where work left off on one branch of one project. There is one
+per `(project, branch)`, overwritten on each update.
+
+## Data directory
+
+Everything lives under `SATCHEL_DATA` (default `./data`, `/data` in the container):
+
+```
+$SATCHEL_DATA/
+  repo/                       git repository, the source of truth
+    core.md
+    topics.yaml               { <topic>: { trigger: "<one line>" } }
+    memories/<topic>/<slug>-<id>.md
+    checkpoints/<project-slug>/<branch-slug>.md
+  index.sqlite                rebuildable search index, plus the recall log
+  models/                     embedding model cache, downloaded on first run
+```
+
+The server creates `repo/` (with `git init`, an empty `core.md` and `topics.yaml`) on
+first start. Every write through the server is one git commit, authored as
+`satchel <satchel@localhost>`, with the client name in the message. The owner may edit
+files directly; the server notices (file watch plus a rescan at startup) and reindexes.
+Direct edits are not auto-committed.
+
+### Memory file
+
+```markdown
+---
+id: m_01hzx3k9
+topic: svelte
+scope: global            # global | project | host
+project: github.com/wellcaffeinated/wefty   # only when scope is project
+host: roastery           # only when scope is host
+created: 2026-11-12T18:04:00Z
+updated: 2026-11-12T18:04:00Z
+source: claude-code      # MCP clientInfo.name of the writer
+---
+Function bindings in Svelte 5 write to the getter's target, not the local variable.
+```
+
+- `id`: `m_` plus 8 lowercase base32 characters, random. Checkpoints use `c_`.
+- The body is the fact, 1 to 5 sentences. `MEMORY_MAX_CHARS` is 1,500.
+- The filename slug is derived from the first words of the body; the id suffix makes it
+  unique. The path is not an identifier: find files by `id`.
+
+### Checkpoint file
+
+```markdown
+---
+id: c_7q2m4t8a
+project: github.com/wellcaffeinated/satchel
+branch: main
+commit: 3f2a9c1
+updated: 2026-11-12T18:04:00Z
+source: claude-code
+---
+Store and index modules done. Next: wire recall logging into the nightly job.
+```
+
+`project` is a free-form string chosen by the client. The plugin uses the `origin`
+remote reduced to `host/owner/repo`, or the directory name when there is no remote.
+The body (summary) may be empty: the plugin's commit hook records hash-only checkpoints
+and keeps any existing summary.
+
+## Module layout and ownership
+
+```
+src/
+  types.ts          shared types and the Store interface (the seam between modules)
+  config.ts         env parsing, limits
+  store/            files + git + file watching           -> implements Store
+  index/            SQLite FTS5, vectors, hybrid ranking   (used only by store/)
+  embed/            in-process embedding model             (used only by index/)
+  server/           MCP server, tools, instructions, REST endpoints
+  auth/             request authentication middleware
+  main.ts           wiring and startup
+plugin/             Claude Code plugin (hooks, skill, MCP config)
+docs/               this file, host-setup.md
+```
+
+`server/` talks to storage only through the `Store` interface in `src/types.ts`.
+
+## MCP surface
+
+Transport: Streamable HTTP at `POST/GET/DELETE /mcp`, stateless where the SDK allows it.
+
+### `instructions` (initialize result)
+
+Generated per connection. Contains the usage rules, then the topic map. Total at most
+`INSTRUCTIONS_MAX_CHARS` (3,800; Claude Code truncates at 4,096). When the map does not
+fit, drop the topics with the fewest memories and end with a line saying `brief` has the
+full list. Not every client passes `instructions` to the model, so the `brief` tool
+description must independently say to call it at the start of a conversation.
+
+Rules text (final wording belongs in `src/server/`, keep it short):
+
+- Call `brief` once at the start of a conversation, with the project and branch if known.
+- Before work that matches a topic's trigger, call `recall` with that topic.
+- Call `remember` when the user corrects you, states a preference, or you learn a
+  non-obvious fact that would have saved time. One fact per call. Do not save what the
+  repo or its docs already record.
+- Call `checkpoint` when stopping work on a branch. A recalled checkpoint is a claim
+  about the past: compare its commit with the repo before relying on it.
+
+### Tools
+
+All tools return text content written for a model to read (compact, no JSON dumps),
+plus `structuredContent` where the SDK makes that cheap.
+
+| Tool | Input | Result |
+|---|---|---|
+| `brief` | `project?`, `branch?` | Core, topic map with counts, and when `project` is given: the checkpoint for `branch` (or all checkpoints of the project when no branch) and the count of project-scoped memories. |
+| `recall` | `query?`, `topic?`, `project?`, `limit?` (default 8, max 25) | Matching memories with id, topic, scope, updated date. At least one of `query`, `topic`. With `project`, that project's memories rank first; other projects' project-scoped memories are excluded. Logs each returned id. |
+| `remember` | `text`, `topic`, `scope?` (default `global`), `project?`, `host?`, `topic_trigger?`, `replaces?` | Saves and returns the id, plus up to 3 similar existing memories so the caller can merge. Unknown `topic` without `topic_trigger` is an error that lists existing topics. `replaces: <id>` rewrites that memory in place. |
+| `forget` | `id` | Deletes a memory or checkpoint. |
+| `checkpoint` | `project`, `branch`, `commit`, `summary?`, `done?` | Upserts the checkpoint. `done: true` deletes it (branch merged or removed). |
+
+Topic names are lowercase kebab-case, at most 32 characters.
+
+### REST endpoints (for hooks and scripts)
+
+Same authentication as `/mcp`. Plain-text responses so shell hooks need no JSON parser.
+
+- `GET /api/brief?project=&branch=` : same text as the `brief` tool.
+- `POST /api/checkpoint` : JSON body with the `checkpoint` tool's fields. `204` on success.
+- `GET /healthz` : unauthenticated, returns `ok`.
+
+## Search
+
+- Full text: SQLite FTS5 (`node:sqlite`, built into Node 24), `porter unicode61`.
+- Embeddings: computed in-process with `@huggingface/transformers`. Model named by
+  `SATCHEL_EMBED_MODEL` (default `Xenova/bge-small-en-v1.5`; `off` disables embeddings).
+  The model is downloaded on first use into `$SATCHEL_DATA/models`, never baked into
+  the image. The server must start and answer with full-text-only results while the
+  model downloads, and whenever loading fails.
+- Vectors are stored as `Float32Array` blobs in `index.sqlite` beside the model name
+  that produced them. On startup, any memory whose stored model name differs from the
+  configured one is re-embedded in the background. Similarity is brute-force cosine;
+  the store is small and no vector index is wanted.
+- Ranking: reciprocal rank fusion of the FTS order and the cosine order.
+- `remember` uses cosine similarity (or FTS when embeddings are off) to report similar
+  existing memories.
+
+`index.sqlite` index tables can be dropped and rebuilt from `repo/` at any time. The
+`recall_log(memory_id, ts, client)` table is the exception: it is usage data, kept in
+the same file but never dropped by a rebuild.
+
+## Authentication
+
+`src/auth/` exposes one Express middleware. Modes, selected by env, any combination:
+
+- **Cloudflare Access** (`CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD`): verify the
+  `Cf-Access-Jwt-Assertion` header with `jose` against
+  `https://<team>/cdn-cgi/access/certs`: signature, `aud`, `iss`, expiry. This is the
+  production mode. Cloudflare's Managed OAuth handles the OAuth flow in front of the
+  server, so the server contains no OAuth code.
+- **Static token** (`SATCHEL_TOKEN`): `Authorization: Bearer <token>`, constant-time
+  compare. For local development and same-host clients.
+- **None** (`SATCHEL_AUTH=none`): only honoured when binding to a loopback address.
+
+With no mode configured the server refuses to start. A failed check returns `401` with
+no detail about why.
+
+## Configuration
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SATCHEL_DATA` | `./data` | Data directory |
+| `SATCHEL_HOST` | `127.0.0.1` (`0.0.0.0` in the container) | Bind address |
+| `SATCHEL_PORT` | `8787` | Port |
+| `SATCHEL_EMBED_MODEL` | `Xenova/bge-small-en-v1.5` | Embedding model, or `off` |
+| `SATCHEL_TOKEN` | unset | Static bearer token |
+| `CF_ACCESS_TEAM_DOMAIN` | unset | e.g. `example.cloudflareaccess.com` |
+| `CF_ACCESS_AUD` | unset | Access application audience tag |
+| `SATCHEL_AUTH` | unset | `none` to disable auth on loopback |
+
+## Not built yet
+
+- Transcript pass: a background job, started by the plugin's session-start hook, that
+  reads unprocessed Claude Code transcripts and submits candidate memories.
+- Nightly consolidation: merge duplicates, split oversized topics, rewrite triggers,
+  promote often-recalled memories into core. Uses `recall_log`.
+- Import of existing Claude Code memory files and the nuggets repo.
