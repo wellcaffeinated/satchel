@@ -1,5 +1,18 @@
 #!/bin/sh
-# Shared helpers for the Satchel hooks. Sourced, never run. POSIX sh + curl + git only.
+# Shared helpers for the Satchel hooks. Sourced, never run. POSIX sh + git only; no network.
+# The hooks never call the server: the MCP connection holds the OAuth login, so they tell
+# the model what to call (and fill-arguments.sh fills in the git-derived arguments).
+
+# Hooks stay silent unless the plugin is configured.
+satchel_enabled() {
+  [ -n "${SATCHEL_URL:-}" ]
+}
+
+# The "cwd" field of the hook's stdin JSON, read with a minimal sed. Prints nothing when the
+# field is absent or odd (escaped characters); callers fall back through satchel_dir.
+satchel_input_cwd() { # json
+  printf '%s' "$1" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"\\]*\)".*/\1/p' | head -n 1
+}
 
 # Directory the hook should look at: the first argument, else the project dir, else $PWD.
 satchel_dir() {
@@ -36,42 +49,12 @@ satchel_branch() { # dir
   git -C "$1" symbolic-ref --short -q HEAD 2>/dev/null
 }
 
+# Short HEAD commit; prints nothing outside a repository or before the first commit.
+satchel_head() { # dir
+  git -C "$1" rev-parse --short --verify --quiet 'HEAD^{commit}' 2>/dev/null
+}
+
 # Escape a string for a JSON value (backslash, double quote; control characters dropped).
 satchel_json_escape() {
   printf '%s' "$1" | tr -d '\000-\037' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
-}
-
-# Run curl against Satchel with the configured auth headers and short timeouts.
-# usage: satchel_curl <curl args...>   (the URL is given by the caller)
-# Auth headers go through a 0600 temp file so tokens never appear in the process list.
-# Returns curl's status; prints nothing of its own.
-satchel_curl() {
-  hdr=$(umask 077 && mktemp 2>/dev/null) || return 1
-  {
-    printf 'X-Satchel-Client: claude-code-hook\n'
-    if [ -n "${SATCHEL_TOKEN:-}" ]; then
-      printf 'Authorization: Bearer %s\n' "$SATCHEL_TOKEN"
-    fi
-    if [ -n "${SATCHEL_CF_CLIENT_ID:-}" ] && [ -n "${SATCHEL_CF_CLIENT_SECRET:-}" ]; then
-      printf 'CF-Access-Client-Id: %s\n' "$SATCHEL_CF_CLIENT_ID"
-      printf 'CF-Access-Client-Secret: %s\n' "$SATCHEL_CF_CLIENT_SECRET"
-    fi
-  } >"$hdr"
-  curl --silent --fail --connect-timeout 1 --max-time 3 -H "@$hdr" "$@"
-  status=$?
-  rm -f "$hdr"
-  return "$status"
-}
-
-# SATCHEL_URL without trailing slashes; fails when unset.
-satchel_base() {
-  base=${SATCHEL_URL:-}
-  [ -n "$base" ] || return 1
-  while :; do
-    case "$base" in
-      */) base=${base%/} ;;
-      *) break ;;
-    esac
-  done
-  printf '%s\n' "$base"
 }

@@ -10,8 +10,9 @@ built-in auto memory. The tools come from the `satchel` MCP server.
 
 ## At the start
 
-- The session-start hook prints a brief. If it did not run, call `brief` with the
-  project and branch.
+- Call `brief` once, before other work. The session-start hook names the project and
+  branch to pass; if it did not run, use the `origin` remote as `host/owner/repo` (else the
+  directory name) and the current branch. Missing arguments may be filled in from git.
 - The brief lists topics, each with a "read before ..." trigger. Before work that matches
   a trigger, call `recall` with that topic. Use `query` for anything not covered by a topic.
 
@@ -36,10 +37,11 @@ Rules:
 
 - When you stop work on a branch, call `checkpoint` with `project`, `branch`, `commit`, and a
   `summary`: what is done, what is next, what is half-finished.
-- A hook records the commit hash after each `git commit`. It keeps your summary.
+- After each `git commit` a hook asks you to record the new commit. Call `checkpoint` with
+  the project, branch and commit it gives and no `summary`, so the stored summary is kept.
 - Use `done: true` once the branch is merged or deleted.
-- A checkpoint is a claim about the past. Compare its commit with `git log` before relying
-  on it. The session-start hook prints one line saying how far behind HEAD it is.
+- A checkpoint is a claim about the past. Compare its commit with HEAD (`git log`) before
+  relying on it. The session-start hook prints the HEAD commit.
 
 ## Do not
 

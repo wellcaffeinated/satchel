@@ -2,16 +2,29 @@
 
 Connects Claude Code to a Satchel memory server so the agent uses it without being told to.
 
-- **MCP server** `satchel` at `$SATCHEL_URL/mcp`.
-- **SessionStart hook**: prints the memory brief for the current project and branch, plus one
-  line saying how the branch checkpoint's commit relates to your working tree.
-- **PostToolUse hook**: after the agent runs `git commit`, records a hash-only checkpoint
-  (`project`, `branch`, `commit`) in the background.
+- **MCP server** `satchel` at `$SATCHEL_URL/mcp`. Authentication is the server's OAuth
+  (Cloudflare Managed OAuth in production): run `/mcp` once and sign in.
+- **SessionStart hook**: tells the agent to call `brief` with the current project and branch,
+  and prints the HEAD commit so it can judge the branch checkpoint the brief returns.
+- **PreToolUse hook** on `brief` and `checkpoint`: fills `project`, `branch` and `commit`
+  from git when the agent leaves them out, so project names always match.
+- **PostToolUse hook**: after the agent runs `git commit`, asks it to record a hash-only
+  checkpoint (`project`, `branch`, `commit`, no summary).
 - **SessionEnd hook**: a stub. The transcript pass is not built yet.
 - **Skill** `satchel`: when to `recall`, `remember` and `checkpoint`.
 
-The hooks need only `sh`, `curl` and `git`. They print nothing and exit 0 if the server is
-down or `SATCHEL_URL` is unset, and add at most about 3 seconds to session start.
+## Why the hooks only prompt
+
+The hooks never call the server. The OAuth login belongs to Claude Code's MCP connection, and
+a shell hook cannot use it. Claude Code's own `mcp_tool` hooks do use that connection, but
+they are skipped on `SessionStart` at launch and can only pass fields of the hook's JSON
+input, which has no git origin or branch. So the hooks work out the git facts locally and the
+agent makes the calls; the PreToolUse hook makes the arguments exact. See "Hooks and OAuth"
+in `docs/host-setup.md` for the test results and the fully automatic options left for later.
+
+The hooks need `sh` and `git`. The PreToolUse hook also needs `jq`; without it, it does
+nothing and the agent's arguments are used as written. The hooks make no network calls and
+print nothing when `SATCHEL_URL` is unset.
 
 ## Install
 
@@ -32,28 +45,23 @@ From git (replace with the real URL):
 Shell equivalents: `claude plugin marketplace add <path-or-url>` and
 `claude plugin install satchel@satchel-plugins`. Restart Claude Code afterwards.
 
-## Environment variables
+## Configuration
 
-Set these in the shell that starts Claude Code (or under `env` in `~/.claude/settings.json`).
+Set `SATCHEL_URL` in the shell that starts Claude Code (or under `env` in
+`~/.claude/settings.json`): the base URL of the server, no trailing path, e.g.
+`https://satchel.example.com`. Then run `/mcp`, select `satchel` and sign in.
 
-| Variable                                           | Meaning                                                                                                            |
-| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `SATCHEL_URL`                                      | Base URL of the server, no trailing path, e.g. `http://127.0.0.1:8787` or `https://satchel.example.com`. Required. |
-| `SATCHEL_TOKEN`                                    | Static bearer token. Same-host or dev setups (server has `SATCHEL_TOKEN`).                                         |
-| `SATCHEL_CF_CLIENT_ID`, `SATCHEL_CF_CLIENT_SECRET` | Cloudflare Access service token, for headless use. Both are needed.                                                |
+If the same server is already configured elsewhere (user, project or managed MCP config),
+Claude Code connects that definition and skips the plugin's duplicate; the hooks work with
+either, as long as `SATCHEL_URL` is set.
 
-Pick one auth setup:
+Local development against a server started with `SATCHEL_TOKEN=dev` has no OAuth. Add the
+server yourself with the token as a header; it takes precedence over the plugin's copy:
 
-1. **Bearer token**: set `SATCHEL_URL` and `SATCHEL_TOKEN`.
-2. **Cloudflare service token**: set `SATCHEL_URL`, `SATCHEL_CF_CLIENT_ID`, `SATCHEL_CF_CLIENT_SECRET`.
-3. **Interactive OAuth**: set only `SATCHEL_URL`. Run `/mcp` in Claude Code and sign in to
-   `satchel`. This needs Managed OAuth on the Access application (see `docs/host-setup.md`).
-
-The MCP connection takes its headers from `scripts/mcp-headers.sh`, which prints only the
-headers whose variables are set. When none are set it prints `{}`, so OAuth stays possible.
-The hooks use the same variables, so with OAuth only (no token or service token) the hooks
-get 401 and stay silent: set a service token or token as well if you want the brief and
-commit checkpoints.
+```bash
+claude mcp add --transport http satchel http://127.0.0.1:8787/mcp --header "Authorization: Bearer dev"
+export SATCHEL_URL=http://127.0.0.1:8787
+```
 
 ## Turning off built-in auto memory (optional, later)
 
@@ -70,9 +78,13 @@ as the environment-variable form.
 
 ## Notes
 
-- The hook project name is the `origin` remote reduced to `host/owner/repo`, lower-cased,
+- The project name is the `origin` remote reduced to `host/owner/repo`, lower-cased,
   without `.git`; with no remote it is the directory name.
-- On a detached HEAD the commit hook records nothing, and the session brief covers all
-  checkpoints of the project.
+- The PreToolUse hook fills arguments only for the local project. A call that names another
+  project is left as written, and so is a call that already has every argument.
+- When it rewrites a call it also approves it, so `brief` and `checkpoint` run without a
+  permission prompt. A call it leaves alone goes through the normal permission rules.
+- On a detached HEAD the commit hook stays silent, and the brief covers all checkpoints of
+  the project.
 - The commit hook matches `git commit ...`; a commit made as `git -C dir commit` does not
-  trigger it. The agent's own `checkpoint` call still works.
+  trigger it. The agent's own `checkpoint` call at the end of work still records it.

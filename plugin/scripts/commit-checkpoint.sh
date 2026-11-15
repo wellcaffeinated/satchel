@@ -1,33 +1,27 @@
 #!/bin/sh
-# PostToolUse hook (Bash, git commit): records a hash-only checkpoint (project, branch,
-# commit; no summary) with POST /api/checkpoint. The server keeps any existing summary.
-# Runs async. Silent and exit 0 on any failure. Skips detached HEAD (no branch to record).
+# PostToolUse hook (Bash, git commit): asks the model to record a hash-only checkpoint
+# (project, branch, commit; no summary, so the server keeps the stored one). The hook cannot
+# call the server itself: the MCP connection holds the OAuth login. Skips detached HEAD.
 
 dir_of_this_script=$(dirname "$0")
 # shellcheck source=lib.sh
 # shellcheck source-path=SCRIPTDIR
 . "$dir_of_this_script/lib.sh" || exit 0
 
-base=$(satchel_base) || exit 0
-
-# The commit may have been made in a directory other than the project root (a worktree,
-# a cd), so prefer the "cwd" field of the hook's stdin JSON. This is the one place a
-# field is read from stdin, with a minimal sed; it is validated as an existing directory
-# and falls back to CLAUDE_PROJECT_DIR / $PWD when absent or odd (backslashes, etc.).
+satchel_enabled || exit 0
+# The commit may have been made outside the project root (a worktree, a cd), so the
+# hook's "cwd" field wins over CLAUDE_PROJECT_DIR.
 input=$(cat 2>/dev/null) || input=""
-cwd=$(printf '%s' "$input" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"\\]*\)".*/\1/p' | head -n 1)
-dir=$(satchel_dir "$cwd") || exit 0
+dir=$(satchel_dir "$(satchel_input_cwd "$input")") || exit 0
 
 branch=$(satchel_branch "$dir")
 [ -n "$branch" ] || exit 0
-commit=$(git -C "$dir" rev-parse --short 'HEAD^{commit}' 2>/dev/null) || exit 0
+commit=$(satchel_head "$dir")
 [ -n "$commit" ] || exit 0
 project=$(satchel_project "$dir")
 [ -n "$project" ] || exit 0
 
-body=$(printf '{"project":"%s","branch":"%s","commit":"%s"}' \
-  "$(satchel_json_escape "$project")" "$(satchel_json_escape "$branch")" "$commit")
-
-printf '%s' "$body" | satchel_curl --output /dev/null -X POST \
-  -H 'Content-Type: application/json' --data-binary @- "$base/api/checkpoint" || true
+message="Satchel: commit $commit on $branch. Call the Satchel \`checkpoint\` tool now with project=$project, branch=$branch, commit=$commit and no summary (the stored summary is kept; write one only when you stop work on this branch)."
+printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"%s"}}\n' \
+  "$(satchel_json_escape "$message")"
 exit 0

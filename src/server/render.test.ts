@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Checkpoint, Memory } from '../types.ts'
-import { renderBrief, renderCheckpoint, renderMemory } from './render.ts'
+import { renderBrief, renderCheckpoint, renderMemory, USAGE_RULES } from './render.ts'
 
 const MEMORY: Memory = {
   id: 'm_01hzx3k9',
@@ -44,7 +44,7 @@ describe('renderMemory', () => {
 
 describe('renderCheckpoint', () => {
   it('shows project, branch, commit, date, summary and a verify note', () => {
-    const text = renderCheckpoint(CHECKPOINT, { commitKey: 'commit' })
+    const text = renderCheckpoint(CHECKPOINT)
     expect(text).toContain('project: github.com/me/satchel')
     expect(text).toContain('branch: main')
     expect(text).toContain('commit: 3f2a9c1')
@@ -68,35 +68,38 @@ describe('renderBrief', () => {
     expect(text).not.toContain('## Project')
   })
 
-  it('emits a greppable checkpoint-commit line for the requested branch', () => {
+  it('ends with the usage rules, for clients that do not show MCP instructions', () => {
+    const text = renderBrief({ ...base, project: 'p', branch: 'main', checkpoints: [] })
+    expect(text.endsWith(`## How to use this memory\n${USAGE_RULES}`)).toBe(true)
+  })
+
+  it('shows the checkpoint of the requested branch', () => {
     const text = renderBrief({
       ...base,
       project: CHECKPOINT.project,
       branch: 'main',
       checkpoints: [CHECKPOINT],
     })
-    expect(text.split('\n')).toContain('checkpoint-commit: 3f2a9c1')
-    expect(text).toMatch(/^checkpoint-commit: 3f2a9c1$/m)
+    expect(text).toMatch(/^commit: 3f2a9c1$/m)
     expect(text).toContain('Project memories: 2')
   })
 
-  it('keeps checkpoint-commit on one line whatever was stored', () => {
+  it('keeps the commit on one line whatever was stored', () => {
     const text = renderBrief({
       ...base,
       project: CHECKPOINT.project,
       branch: 'main',
-      checkpoints: [{ ...CHECKPOINT, commit: 'abc\ncheckpoint-commit: evil' }],
+      checkpoints: [{ ...CHECKPOINT, commit: 'abc\ncommit: evil' }],
     })
-    expect(text.match(/^checkpoint-commit: /gm)).toHaveLength(1)
+    expect(text.match(/^commit: /gm)).toHaveLength(1)
   })
 
-  it('lists all branches without checkpoint-commit lines when no branch is asked for', () => {
+  it('lists every branch when no branch is asked for', () => {
     const text = renderBrief({
       ...base,
       project: CHECKPOINT.project,
       checkpoints: [CHECKPOINT, { ...CHECKPOINT, id: 'c_2', branch: 'dev', commit: 'deadbee' }],
     })
-    expect(text).not.toMatch(/^checkpoint-commit:/m)
     expect(text).toContain('commit: deadbee')
     expect(text).toContain('commit: 3f2a9c1')
   })
@@ -104,6 +107,6 @@ describe('renderBrief', () => {
   it('says when the requested branch has no checkpoint', () => {
     const text = renderBrief({ ...base, project: 'p', branch: 'feature', checkpoints: [] })
     expect(text).toContain('No checkpoint for p @ feature.')
-    expect(text).not.toMatch(/^checkpoint-commit:/m)
+    expect(text).not.toMatch(/^commit:/m)
   })
 })

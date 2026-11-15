@@ -1,4 +1,4 @@
-// Tool input schemas, shared by the MCP tools and the REST endpoints.
+// Input schemas of the MCP tools.
 import * as z from 'zod'
 import {
   BRANCH_MAX_CHARS,

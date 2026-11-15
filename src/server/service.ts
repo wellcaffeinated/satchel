@@ -1,4 +1,4 @@
-// The operations behind the tools and REST endpoints. Each returns the text a model reads
+// The operations behind the MCP tools. Each returns the text a model reads
 // and throws SatchelError for caller mistakes.
 import { BRANCH_MAX_CHARS, PROJECT_MAX_CHARS, RECALL_DEFAULT_LIMIT } from '../config.ts'
 import { type Memory, SatchelError, type Store } from '../types.ts'

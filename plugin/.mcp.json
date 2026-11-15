@@ -2,8 +2,7 @@
   "mcpServers": {
     "satchel": {
       "type": "http",
-      "url": "${SATCHEL_URL}/mcp",
-      "headersHelper": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/mcp-headers.sh\""
+      "url": "${SATCHEL_URL}/mcp"
     }
   }
 }

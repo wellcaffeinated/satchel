@@ -1,4 +1,4 @@
-// Who is writing: MCP clientInfo.name, or the X-Satchel-Client header for REST.
+// Who is writing: MCP clientInfo.name.
 //
 // The MCP transport is stateless, so a tools/call request reaches a fresh server that never
 // saw `initialize` and has no clientInfo. To keep the writer's name anyway, the initialize
@@ -10,7 +10,6 @@ import { CLIENT_NAME_MAX_CHARS } from '../config.ts'
 import { flattenLine } from './text.ts'
 
 export const UNKNOWN_CLIENT = 'unknown'
-export const REST_CLIENT = 'rest'
 
 // Names end up in git commit messages and file front matter: keep them plain.
 const UNSAFE_NAME_CHARS = /[^A-Za-z0-9 ._@/+-]/g

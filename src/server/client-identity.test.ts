@@ -15,9 +15,9 @@ describe('client identity', () => {
   })
 
   it('sanitises names that would break commit messages or front matter', () => {
-    expect(sanitizeClientName('evil\nname: x', 'rest')).toBe('evil-name- x')
-    expect(sanitizeClientName('a'.repeat(200), 'rest').length).toBeLessThanOrEqual(64)
-    expect(sanitizeClientName('', 'rest')).toBe('rest')
-    expect(sanitizeClientName(undefined, 'rest')).toBe('rest')
+    expect(sanitizeClientName('evil\nname: x', 'fallback')).toBe('evil-name- x')
+    expect(sanitizeClientName('a'.repeat(200), 'fallback').length).toBeLessThanOrEqual(64)
+    expect(sanitizeClientName('', 'fallback')).toBe('fallback')
+    expect(sanitizeClientName(undefined, 'fallback')).toBe('fallback')
   })
 })

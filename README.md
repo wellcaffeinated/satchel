@@ -17,12 +17,14 @@ curl http://127.0.0.1:8787/healthz                      # ok
 `SATCHEL_EMBED_MODEL=off` skips the embedding model download and uses full-text search only.
 Data goes to `./data` (git-ignored). Other commands: `pnpm test`, `pnpm typecheck`, `pnpm lint`.
 
-Use it from Claude Code with the plugin:
+Use it from Claude Code with the plugin. In production the plugin signs in through the
+server's OAuth (`/mcp`); against the dev server, add the server with the token yourself:
 
 ```
 /plugin marketplace add /path/to/satchel
 /plugin install satchel@satchel-plugins
-export SATCHEL_URL=http://127.0.0.1:8787 SATCHEL_TOKEN=dev
+claude mcp add --transport http satchel http://127.0.0.1:8787/mcp --header "Authorization: Bearer dev"
+export SATCHEL_URL=http://127.0.0.1:8787
 ```
 
 ## Docker
@@ -39,5 +41,6 @@ optional cloudflared sidecar.
 
 - [docs/design.md](docs/design.md): the contract: data layout, tools, auth, configuration.
 - [docs/host-setup.md](docs/host-setup.md): Cloudflare tunnel and Access, Managed OAuth, claude.ai,
-  Claude Code, Hermes, backups. Starts with a three-question spike.
+  Claude Code, Hermes, backups. Starts with a three-question spike (done: OAuth only) and ends
+  with how the plugin's hooks work without a token.
 - [plugin/README.md](plugin/README.md): the Claude Code plugin.

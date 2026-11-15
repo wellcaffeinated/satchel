@@ -84,8 +84,8 @@ Store and index modules done. Next: wire recall logging into the nightly job.
 
 `project` is a free-form string chosen by the client. The plugin uses the `origin`
 remote reduced to `host/owner/repo`, or the directory name when there is no remote.
-The body (summary) may be empty: the plugin's commit hook records hash-only checkpoints
-and keeps any existing summary.
+The body (summary) may be empty: after each commit the plugin asks the agent for a
+hash-only checkpoint, which keeps any existing summary.
 
 ## Module layout and ownership
 
@@ -96,7 +96,7 @@ src/
   store/            files + git + file watching           -> implements Store
   index/            SQLite FTS5, vectors, hybrid ranking   (used only by store/)
   embed/            in-process embedding model             (used only by index/)
-  server/           MCP server, tools, instructions, REST endpoints
+  server/           MCP server, tools, instructions, HTTP app
   auth/             request authentication middleware
   main.ts           wiring and startup
 plugin/             Claude Code plugin (hooks, skill, MCP config)
@@ -114,8 +114,10 @@ Transport: Streamable HTTP at `POST/GET/DELETE /mcp`, stateless where the SDK al
 Generated per connection. Contains the usage rules, then the topic map. Total at most
 `INSTRUCTIONS_MAX_CHARS` (3,800; Claude Code truncates at 4,096). When the map does not
 fit, drop the topics with the fewest memories and end with a line saying `brief` has the
-full list. Not every client passes `instructions` to the model, so the `brief` tool
-description must independently say to call it at the start of a conversation.
+full list. Not every client passes `instructions` to the model (the spike found claude.ai
+and Claude Desktop do not; Claude Code does), so the `brief` tool description must
+independently say to call it at the start of a conversation, and the `brief` result ends
+with the usage rules (everything below except the first bullet).
 
 Rules text (final wording belongs in `src/server/`, keep it short):
 
@@ -155,15 +157,14 @@ Details settled during the first build:
 - Tool results are text only, with no `structuredContent`, because some clients show the
   structured form to the model in place of the text.
 
-### REST endpoints (for hooks and scripts)
+### Other HTTP routes
 
-Same authentication as `/mcp`. Plain-text responses so shell hooks need no JSON parser.
-
-- `GET /api/brief?project=&branch=` : same text as the `brief` tool. When there is a
-  checkpoint for the requested branch, the text contains a line of the exact form
-  `checkpoint-commit: <hash>`, which the plugin's session-start hook reads.
-- `POST /api/checkpoint` : JSON body with the `checkpoint` tool's fields. `204` on success.
 - `GET /healthz` : unauthenticated, returns `ok`.
+
+There is no REST API. The `GET /api/brief` and `POST /api/checkpoint` endpoints existed
+for the plugin's curl hooks; with OAuth as the only production auth a shell hook cannot
+use them (see "Plugin and OAuth" below), so they were removed. Everything goes through
+`/mcp`.
 
 ## Search
 
@@ -196,10 +197,30 @@ the same file but never dropped by a rebuild.
   server, so the server contains no OAuth code.
 - **Static token** (`SATCHEL_TOKEN`): `Authorization: Bearer <token>`, constant-time
   compare. For local development and same-host clients.
+
+Production decision (after the host-setup spike): every client connects through Managed
+OAuth, with no Cloudflare service token and no `SATCHEL_TOKEN`. `SATCHEL_TOKEN` stays for
+local development.
 - **None** (`SATCHEL_AUTH=none`): only honoured when binding to a loopback address.
 
 With no mode configured the server refuses to start. A failed check returns `401` with
 no detail about why.
+
+## Plugin and OAuth
+
+The Claude Code plugin's hooks run as shell commands, and the OAuth login belongs to Claude
+Code's MCP connection, so the hooks never call the server. Instead:
+
+- `SessionStart` works out project, branch and HEAD from git and tells the agent to call
+  `brief` with them.
+- `PreToolUse` on `brief` and `checkpoint` fills missing `project`, `branch` and `commit`
+  from git (`updatedInput`), so project names do not depend on the model.
+- `PostToolUse` after `git commit` asks the agent for a hash-only `checkpoint`.
+
+Claude Code's `mcp_tool` hooks do use the MCP connection, but they are skipped on
+`SessionStart` at launch and can only pass fields of the hook's JSON input, which carries
+no git origin or branch. Test results and the fully automatic options (a credential the
+hooks hold themselves) are in `docs/host-setup.md`, "Hooks and OAuth".
 
 ## Configuration
 
@@ -246,7 +267,9 @@ commit message. When a real recall misses in daily use, add it as a case first.
 ## Not built yet
 
 - Transcript pass: a background job, started by the plugin's session-start hook, that
-  reads unprocessed Claude Code transcripts and submits candidate memories.
+  reads unprocessed Claude Code transcripts and submits candidate memories. Submitting
+  needs a credential a background job can use; with OAuth only, that means one of the
+  automatic options in `docs/host-setup.md`, "Hooks and OAuth".
 - Nightly consolidation: merge duplicates, split oversized topics, rewrite triggers,
   promote often-recalled memories into core. Uses `recall_log`.
 - Import of existing Claude Code memory files and the nuggets repo.

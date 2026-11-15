@@ -162,7 +162,7 @@ describe('MCP over Streamable HTTP', () => {
     expect(isError(result)).toBe(false)
     expect(text).toContain('The owner prefers pnpm')
     expect(text).toContain('- docker (1)')
-    expect(text).toMatch(/^checkpoint-commit: 3f2a9c1$/m)
+    expect(text).toMatch(/^commit: 3f2a9c1$/m)
     expect(text).toContain('Project memories: 1')
     expect(text).toMatch(/compare commit 3f2a9c1 with the repo/)
   })
@@ -302,7 +302,7 @@ describe('instructions cap', () => {
   })
 })
 
-describe('REST and auth', () => {
+describe('HTTP and auth', () => {
   const state: { harness?: Harness } = {}
   const base = () => state.harness?.base ?? ''
   beforeAll(async () => {
@@ -317,71 +317,22 @@ describe('REST and auth', () => {
   })
 
   it('every other route returns a bare 401 without credentials', async () => {
-    for (const path of ['/mcp', '/api/brief', '/api/checkpoint', '/nope']) {
+    for (const path of ['/mcp', '/nope']) {
       const response = await fetch(`${base()}${path}`, { method: 'POST' })
       expect(response.status).toBe(401)
       expect(await response.text()).toBe('')
     }
   })
 
-  it('GET /api/brief returns plain text with checkpoint-commit', async () => {
-    const response = await fetch(`${base()}/api/brief?project=github.com/me/app&branch=main`, {
-      headers: AUTH_HEADERS,
-    })
-    expect(response.status).toBe(200)
-    expect(response.headers.get('content-type')).toMatch(/^text\/plain/)
-    const text = await response.text()
-    expect(text).toMatch(/^checkpoint-commit: 3f2a9c1$/m)
-    expect(text).toContain('The owner prefers pnpm')
-  })
-
-  it('POST /api/checkpoint saves with the X-Satchel-Client name and returns 204', async () => {
-    const response = await fetch(`${base()}/api/checkpoint`, {
-      method: 'POST',
-      headers: { ...AUTH_HEADERS, 'content-type': 'application/json', 'x-satchel-client': 'hook' },
-      body: JSON.stringify({ project: 'p', branch: 'b', commit: 'abc1234' }),
-    })
-    expect(response.status).toBe(204)
-    const [saved] = (await state.harness?.store.checkpoints('p', 'b')) ?? []
-    expect(saved?.source).toBe('hook')
-    expect(saved?.summary).toBe('')
-  })
-
-  it('POST /api/checkpoint defaults the client to rest and rejects bad bodies', async () => {
-    const ok = await fetch(`${base()}/api/checkpoint`, {
-      method: 'POST',
-      headers: { ...AUTH_HEADERS, 'content-type': 'application/json' },
-      body: JSON.stringify({ project: 'p', branch: 'c', commit: 'abc1234', summary: 's' }),
-    })
-    expect(ok.status).toBe(204)
-    const [saved] = (await state.harness?.store.checkpoints('p', 'c')) ?? []
-    expect(saved?.source).toBe('rest')
-
-    const missing = await fetch(`${base()}/api/checkpoint`, {
-      method: 'POST',
-      headers: { ...AUTH_HEADERS, 'content-type': 'application/json' },
-      body: JSON.stringify({ project: 'p' }),
-    })
-    expect(missing.status).toBe(400)
-    expect(await missing.text()).toContain('branch')
-
-    const malformed = await fetch(`${base()}/api/checkpoint`, {
-      method: 'POST',
-      headers: { ...AUTH_HEADERS, 'content-type': 'application/json' },
-      body: '{not json',
-    })
-    expect(malformed.status).toBe(400)
-  })
-
   it('rejects oversized JSON bodies', async () => {
-    const response = await fetch(`${base()}/api/checkpoint`, {
+    const response = await fetch(`${base()}/mcp`, {
       method: 'POST',
       headers: { ...AUTH_HEADERS, 'content-type': 'application/json' },
       body: JSON.stringify({
-        project: 'p',
-        branch: 'b',
-        commit: 'a',
-        summary: 'x'.repeat(400_000),
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'ping',
+        params: { pad: 'x'.repeat(400_000) },
       }),
     })
     expect(response.status).toBe(413)
