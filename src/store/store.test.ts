@@ -54,6 +54,88 @@ describe('store', () => {
     rmSync(dataDir(), { recursive: true, force: true })
   })
 
+  describe('references', () => {
+    const save = (
+      store: SatchelStore,
+      extra: Partial<Parameters<SatchelStore['saveReference']>[0]> = {},
+    ) =>
+      store.saveReference({
+        title: 'Biome config',
+        description: 'biome.json enforcing the code-style rules',
+        content: '{\n  "linter": { "enabled": true }\n}',
+        format: 'jsonc',
+        topic: 'linting',
+        topicTrigger: 'read before setting up a linter',
+        tags: ['biome'],
+        source: 'test-client',
+        ...extra,
+      })
+
+    it('stores content verbatim in a fenced file, survives a rebuild, and reads back', async () => {
+      const awkward = 'Use ``` fences:\n```ts\nconst x = 1\n```\nand ```` too.'
+      const first = await open()
+      const reference = await save(first, { content: awkward, format: 'markdown' })
+      const plain = await save(first, { title: 'Second', format: 'sh', content: 'echo ```' })
+      expect(reference.id).toMatch(/^r_[a-z2-7]{8}$/)
+      const dir = join(repoDir(), 'references', 'linting')
+      expect(readdirSync(dir)).toHaveLength(2)
+      const shRaw = readFileSync(
+        join(dir, readdirSync(dir).find((f) => f.includes(plain.id)) ?? ''),
+        'utf8',
+      )
+      expect(shRaw).toContain('````sh\necho ```\n````')
+      await first.close()
+      rmSync(join(dataDir(), 'index.sqlite'), { force: true })
+      const second = await open()
+      const back = await second.read(reference.id)
+      expect(back.kind === 'reference' && back.reference.content).toBe(awkward)
+      const sh = await second.read(plain.id)
+      expect(sh.kind === 'reference' && sh.reference.content).toBe('echo ```')
+      expect(git(repoDir(), 'status', '--porcelain').trim()).toBe('')
+    })
+
+    it('is found by title, description, topic or label, never by content', async () => {
+      const store = await open()
+      const reference = await save(store)
+      const ids = async (input: Parameters<SatchelStore['findReferences']>[0]) =>
+        (await store.findReferences(input)).map((r) => r.id)
+      expect(await ids({ query: 'biome' })).toEqual([reference.id])
+      expect(await ids({ query: 'code-style rules' })).toEqual([reference.id])
+      expect(await ids({ query: 'linter enabled' })).toEqual([])
+      expect(await ids({ topic: 'linting' })).toEqual([reference.id])
+      expect(await ids({ tags: ['biome', 'code'] })).toEqual([reference.id])
+      expect(await ids({ tags: ['code'] })).toEqual([])
+      const topic = (await store.topics()).find((t) => t.name === 'linting')
+      expect(topic).toMatchObject({ count: 0, references: 1 })
+      expect((await store.labels()).tags).toEqual([])
+    })
+
+    it('replaces in place and is forgotten like a memory', async () => {
+      const store = await open()
+      const reference = await save(store)
+      const updated = await save(store, { content: '{}', replaces: reference.id })
+      expect(updated.id).toBe(reference.id)
+      expect(updated.created).toBe(reference.created)
+      expect(readdirSync(join(repoDir(), 'references', 'linting'))).toHaveLength(1)
+      await store.forget(reference.id, 'c')
+      await expect(store.read(reference.id)).rejects.toMatchObject({ code: 'not_found' })
+      await expect(save(store, { replaces: 'r_zzzzzzzz' })).rejects.toMatchObject({
+        code: 'not_found',
+      })
+    })
+
+    it.each([
+      ['invalid', { content: '   ' }],
+      ['too_long', { content: 'x'.repeat(64_001) }],
+      ['too_long', { title: 't'.repeat(121) }],
+      ['invalid', { format: 'Not A Format' }],
+      ['unknown_topic', { topic: 'brand-new', topicTrigger: undefined }],
+    ] as const)('rejects bad input with %s', async (code, override) => {
+      const store = await open()
+      await expect(save(store, override)).rejects.toMatchObject({ code })
+    })
+  })
+
   describe('first start', () => {
     it('creates a git repo with core.md, topics.yaml and one initial commit', async () => {
       await open()

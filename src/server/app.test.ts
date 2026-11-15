@@ -135,14 +135,16 @@ describe('MCP over Streamable HTTP', () => {
     expect(instructions.length).toBeLessThanOrEqual(INSTRUCTIONS_MAX_CHARS)
   })
 
-  it('lists five tools with annotations and tight descriptions', async () => {
+  it('lists seven tools with annotations and tight descriptions', async () => {
     const { tools } = await client().listTools()
     expect(tools.map((tool) => tool.name).toSorted()).toEqual([
       'brief',
       'checkpoint',
       'forget',
       'memorize',
+      'read',
       'recall',
+      'save_reference',
     ])
     for (const tool of tools) {
       expect(tool.description?.length ?? 0).toBeLessThan(1000)
@@ -365,6 +367,53 @@ describe('loading rules for the work', () => {
     expect(text).toMatch(
       /Loaded \d+ of 30\. Load the rest: call recall with tags=\["bulk"\] and offset=\d+\./,
     )
+  })
+})
+
+describe('references over MCP', () => {
+  const state: { harness?: Harness; client?: Client } = {}
+  const call = async (name: string, args: Record<string, unknown>) => {
+    if (!state.client) throw new Error('not connected')
+    const result = await state.client.callTool({ name, arguments: args })
+    return { text: textOf(result), isError: isError(result) }
+  }
+  beforeAll(async () => {
+    state.harness = await start({
+      topics: { linting: { trigger: 'read before setting up a linter' } },
+      memories: [
+        memory({ id: 'm_aaaaaaaa', topic: 'linting', text: 'Lint what you can.', tags: ['code'] }),
+      ],
+    })
+    state.client = await connect(state.harness.base)
+  })
+  afterAll(async () => {
+    await state.client?.close()
+    await state.harness?.close()
+  })
+
+  it('saves a reference, lists it by title, and reads it back verbatim', async () => {
+    const saved = await call('save_reference', {
+      title: 'Biome config',
+      description: 'biome.json enforcing the code-style rules',
+      content: '{ "linter": {} }',
+      format: 'jsonc',
+      topic: 'linting',
+      tags: ['code', 'biome'],
+    })
+    expect(saved.isError).toBe(false)
+    const id = /r_\w{8}/.exec(saved.text)?.[0] ?? ''
+    expect(saved.text).toContain(
+      `${id} [linting | reference | global | tags: code, biome] Biome config: biome.json`,
+    )
+    const listed = await call('recall', { query: 'biome' })
+    expect(listed.text).toContain('References (get one with `read`):')
+    expect(listed.text).toContain(`- ${id} [linting | reference`)
+    const loaded = await call('brief', { tags: ['code', 'biome'] })
+    expect(loaded.text).toContain('Lint what you can.')
+    expect(loaded.text).toContain(`- ${id} [linting | reference`)
+    const read = await call('read', { id })
+    expect(read.text).toMatch(/```jsonc\n\{ "linter": \{\} \}\n```$/)
+    expect((await call('read', { id: 'r_zzzzzzzz' })).isError).toBe(true)
   })
 })
 

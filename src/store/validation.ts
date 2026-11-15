@@ -5,12 +5,22 @@ import {
   LABEL_MAX_CHARS,
   LABELS_MAX_COUNT,
   MEMORY_MAX_CHARS,
+  REFERENCE_DESCRIPTION_MAX_CHARS,
+  REFERENCE_FORMAT_PATTERN,
+  REFERENCE_MAX_CHARS,
+  REFERENCE_TITLE_MAX_CHARS,
   TAG_PATTERN,
   TOPIC_NAME_MAX_CHARS,
   TOPIC_NAME_PATTERN,
   TRIGGER_MAX_CHARS,
 } from '../config.ts'
-import { type CheckpointInput, type MemorizeInput, SatchelError, type Scope } from '../types.ts'
+import {
+  type CheckpointInput,
+  type MemorizeInput,
+  SatchelError,
+  type SaveReferenceInput,
+  type Scope,
+} from '../types.ts'
 
 const IDENTIFIER_MAX_CHARS = 200
 const COMMIT_MAX_CHARS = 64
@@ -18,6 +28,20 @@ const UNKNOWN_CLIENT = 'unknown'
 
 export interface ValidMemoryFields {
   text: string
+  topic: string
+  scope: Scope
+  project?: string
+  host?: string
+  filetypes?: string[]
+  tags?: string[]
+  topicTrigger?: string
+}
+
+export interface ValidReferenceFields {
+  title: string
+  description: string
+  content: string
+  format: string
   topic: string
   scope: Scope
   project?: string
@@ -76,7 +100,9 @@ export function validateTrigger(trigger: string): string {
   return requireText(trigger.replace(/\s+/g, ' '), 'topic_trigger', TRIGGER_MAX_CHARS)
 }
 
-const SCOPE_FIELDS: Record<Scope, (input: MemorizeInput) => { project?: string; host?: string }> = {
+type Scoped = Pick<MemorizeInput, 'project' | 'host'>
+
+const SCOPE_FIELDS: Record<Scope, (input: Scoped) => { project?: string; host?: string }> = {
   global: () => ({}),
   project: (input) => ({
     project: requireText(
@@ -139,6 +165,49 @@ export function validateMemorize(input: MemorizeInput): ValidMemoryFields {
   if (!scopeFields) throw new SatchelError('invalid', `Unknown scope "${String(scope)}".`)
   return {
     text: requireText(input.text, 'text', MEMORY_MAX_CHARS),
+    topic: validateTopicName(input.topic),
+    scope,
+    ...scopeFields(input),
+    ...labelFields(input),
+    ...(input.topicTrigger === undefined
+      ? {}
+      : { topicTrigger: validateTrigger(input.topicTrigger) }),
+  }
+}
+
+const DEFAULT_REFERENCE_FORMAT = 'markdown'
+
+function validateFormat(format: string | undefined): string {
+  const value = format?.trim().toLowerCase() || DEFAULT_REFERENCE_FORMAT
+  if (!REFERENCE_FORMAT_PATTERN.test(value)) {
+    throw new SatchelError(
+      'invalid',
+      `format "${value}" should be a language name such as "jsonc".`,
+    )
+  }
+  return value
+}
+
+export function validateReference(input: SaveReferenceInput): ValidReferenceFields {
+  const scope = input.scope ?? 'global'
+  const scopeFields = SCOPE_FIELDS[scope]
+  if (!scopeFields) throw new SatchelError('invalid', `Unknown scope "${String(scope)}".`)
+  if (input.content.trim() === '') throw new SatchelError('invalid', 'content must not be empty.')
+  if (input.content.length > REFERENCE_MAX_CHARS) {
+    throw new SatchelError(
+      'too_long',
+      `content is ${input.content.length} characters; the limit is ${REFERENCE_MAX_CHARS}.`,
+    )
+  }
+  return {
+    title: requireText(input.title.replace(/\s+/g, ' '), 'title', REFERENCE_TITLE_MAX_CHARS),
+    description: requireText(
+      input.description.replace(/\s+/g, ' '),
+      'description',
+      REFERENCE_DESCRIPTION_MAX_CHARS,
+    ),
+    content: input.content.replace(/\r\n/g, '\n').replace(/^\n+|\s+$/g, ''),
+    format: validateFormat(input.format),
     topic: validateTopicName(input.topic),
     scope,
     ...scopeFields(input),

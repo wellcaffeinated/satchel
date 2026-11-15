@@ -17,6 +17,43 @@ export interface Memory {
   text: string
 }
 
+/** Verbatim material an agent consults or copies, found by title and description. */
+export interface Reference {
+  id: string // "r_" + 8 base32 chars
+  topic: string
+  title: string
+  description: string // one line
+  scope: Scope
+  project?: string
+  host?: string
+  filetypes?: string[]
+  tags?: string[]
+  format: string // the content's language, e.g. "jsonc"; "markdown" is stored unfenced
+  created: string
+  updated: string
+  source: string
+  content: string
+}
+
+/** A reference without its content, as listings show it. */
+export type ReferenceSummary = Omit<Reference, 'content'>
+
+export interface SaveReferenceInput {
+  title: string
+  description: string
+  content: string
+  format?: string // default "markdown"
+  topic: string
+  scope?: Scope
+  project?: string
+  host?: string
+  filetypes?: string[]
+  tags?: string[]
+  topicTrigger?: string
+  replaces?: string // id of a reference to rewrite in place
+  source: string
+}
+
 export interface Checkpoint {
   id: string // "c_" + 8 base32 chars
   project: string
@@ -31,6 +68,7 @@ export interface Topic {
   name: string
   trigger: string
   count: number // memories in this topic
+  references?: number // references in this topic, when any
 }
 
 /** A machine that has host-scoped memories. */
@@ -112,10 +150,17 @@ export interface Store {
   recall(input: RecallInput): Promise<Memory[]>
   /** Records that these memories were shown to a client. */
   logRecall(input: { ids: string[]; client: string }): Promise<void>
-  /** Every label in use, most used first. */
+  /** Every label used by a memory, most used first. */
   labels(): Promise<Labels>
+  /** References matching a recall request, without content; at most REFERENCES_LISTED_MAX. */
+  findReferences(input: RecallInput): Promise<ReferenceSummary[]>
+  saveReference(input: SaveReferenceInput): Promise<Reference>
+  /** A memory or reference by id. Throws SatchelError("not_found"). */
+  read(
+    id: string,
+  ): Promise<{ kind: 'memory'; memory: Memory } | { kind: 'reference'; reference: Reference }>
   memorize(input: MemorizeInput): Promise<MemorizeResult>
-  /** Deletes a memory or checkpoint by id. Throws SatchelError("not_found"). */
+  /** Deletes a memory, reference or checkpoint by id. Throws SatchelError("not_found"). */
   forget(id: string, source: string): Promise<void>
   checkpoint(input: CheckpointInput): Promise<Checkpoint>
   /** Removes the checkpoint for a branch; no error when there is none. */

@@ -7,7 +7,10 @@ import {
   type MemorizeInput,
   type Memory,
   type RecallInput,
+  type Reference,
+  type ReferenceSummary,
   SatchelError,
+  type SaveReferenceInput,
   type Store,
   type Topic,
 } from '../types.ts'
@@ -18,12 +21,14 @@ export interface FakeStoreSeed {
   core?: string
   topics?: Record<string, { trigger: string }>
   memories?: Memory[]
+  references?: Reference[]
   checkpoints?: Checkpoint[]
 }
 
 export interface FakeStore extends Store {
   readonly recallLog: Array<{ id: string; client: string }>
   readonly memories: Map<string, Memory>
+  readonly references: Map<string, Reference>
   readonly checkpointsByKey: Map<string, Checkpoint>
   closed(): boolean
 }
@@ -41,7 +46,10 @@ function checkpointKey(project: string, branch: string): string {
 }
 
 /** The matching rule from docs/design.md: every label field the memory sets must overlap. */
-function matchesWork(memory: Memory, work: { filetypes?: string[]; tags?: string[] }): boolean {
+function matchesWork(
+  memory: { filetypes?: string[]; tags?: string[] },
+  work: { filetypes?: string[]; tags?: string[] },
+): boolean {
   const field = (own: string[] | undefined, asked: string[] | undefined) =>
     !own?.length || own.some((value) => asked?.includes(value))
   const labelled = Boolean(memory.filetypes?.length || memory.tags?.length)
@@ -58,6 +66,8 @@ export function createFakeStore(seed: FakeStoreSeed = {}): FakeStore {
   const coreText = seed.core ?? ''
   const triggers = new Map(Object.entries(seed.topics ?? {}).map(([n, t]) => [n, t.trigger]))
   const memories = new Map((seed.memories ?? []).map((m) => [m.id, m]))
+  const references = new Map((seed.references ?? []).map((r) => [r.id, r]))
+  const nextReferenceId = idGenerator('r')
   const checkpointsByKey = new Map(
     (seed.checkpoints ?? []).map((c) => [checkpointKey(c.project, c.branch), c]),
   )
@@ -93,6 +103,54 @@ export function createFakeStore(seed: FakeStoreSeed = {}): FakeStore {
       .filter(visible)
       .filter((m) => !hostOnly || m.scope === 'host')
       .filter((m) => !labelled || matchesWork(m, input))
+  }
+
+  async function findReferences(input: RecallInput): Promise<ReferenceSummary[]> {
+    const labelled = input.filetypes !== undefined || input.tags !== undefined
+    const words = input.query?.toLowerCase().split(/\s+/).filter(Boolean) ?? []
+    const mentions = (r: Reference) =>
+      words.length === 0 ||
+      words.some((w) => `${r.title} ${r.description}`.toLowerCase().includes(w))
+    return [...references.values()]
+      .filter((r) => input.topic === undefined || r.topic === input.topic)
+      .filter(mentions)
+      .filter((r) => !labelled || matchesWork(r, input))
+      .map(({ content: _content, ...summary }) => summary)
+  }
+
+  async function saveReference(input: SaveReferenceInput): Promise<Reference> {
+    if (!triggers.has(input.topic)) {
+      if (!input.topicTrigger) throw unknownTopic(input.topic)
+      triggers.set(input.topic, input.topicTrigger)
+    }
+    const previous = input.replaces ? references.get(input.replaces) : undefined
+    if (input.replaces && !previous) {
+      throw new SatchelError('not_found', `No reference ${input.replaces}.`)
+    }
+    const reference: Reference = {
+      id: previous?.id ?? nextReferenceId(),
+      topic: input.topic,
+      title: input.title,
+      description: input.description,
+      scope: input.scope ?? 'global',
+      ...(input.filetypes?.length ? { filetypes: input.filetypes } : {}),
+      ...(input.tags?.length ? { tags: input.tags } : {}),
+      format: input.format ?? 'markdown',
+      created: previous?.created ?? FIXED_TIME,
+      updated: FIXED_TIME,
+      source: input.source,
+      content: input.content,
+    }
+    references.set(reference.id, reference)
+    return reference
+  }
+
+  async function read(id: string) {
+    const memory = memories.get(id)
+    if (memory) return { kind: 'memory' as const, memory }
+    const reference = references.get(id)
+    if (reference) return { kind: 'reference' as const, reference }
+    throw new SatchelError('not_found', `No memory or reference ${id}.`)
   }
 
   async function logRecall(input: { ids: string[]; client: string }) {
@@ -141,7 +199,7 @@ export function createFakeStore(seed: FakeStoreSeed = {}): FakeStore {
   }
 
   async function forget(id: string): Promise<void> {
-    if (memories.delete(id)) return
+    if (memories.delete(id) || references.delete(id)) return
     const key = [...checkpointsByKey].find(([, c]) => c.id === id)?.[0]
     if (key === undefined) throw new SatchelError('not_found', `No memory or checkpoint ${id}.`)
     checkpointsByKey.delete(key)
@@ -191,11 +249,15 @@ export function createFakeStore(seed: FakeStoreSeed = {}): FakeStore {
   return {
     recallLog,
     memories,
+    references,
     checkpointsByKey,
     closed: () => state.closed,
     core: async () => coreText,
     topics,
     recall,
+    findReferences,
+    saveReference,
+    read,
     logRecall,
     labels,
     memorize,

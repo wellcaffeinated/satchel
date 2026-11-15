@@ -1,14 +1,15 @@
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { Checkpoint, Memory } from '../types.ts'
-import { hashContent, parseCheckpoint, parseMemory } from './memory-files.ts'
+import type { Checkpoint, Memory, Reference } from '../types.ts'
+import { hashContent, parseCheckpoint, parseMemory, parseReference } from './memory-files.ts'
 
 export type ScannedFile =
   | { kind: 'memory'; path: string; hash: string; memory: Memory }
   | { kind: 'checkpoint'; path: string; hash: string; checkpoint: Checkpoint }
+  | { kind: 'reference'; path: string; hash: string; reference: Reference }
   | { kind: 'malformed'; path: string; hash: string; error: string }
 
-const ROOTS = ['memories', 'checkpoints'] as const
+const ROOTS = ['memories', 'references', 'checkpoints'] as const
 
 const PARSERS = {
   memories: (path: string, hash: string, raw: string): ScannedFile => ({
@@ -16,6 +17,12 @@ const PARSERS = {
     path,
     hash,
     memory: parseMemory(raw),
+  }),
+  references: (path: string, hash: string, raw: string): ScannedFile => ({
+    kind: 'reference',
+    path,
+    hash,
+    reference: parseReference(raw),
   }),
   checkpoints: (path: string, hash: string, raw: string): ScannedFile => ({
     kind: 'checkpoint',

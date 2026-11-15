@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { CORE_MAX_CHARS } from '../config.ts'
+import { CORE_MAX_CHARS, REFERENCES_LISTED_MAX } from '../config.ts'
 import { createHuggingFaceLoader, type EmbedderLoader } from '../embed/index.ts'
 import { createSearchIndex, hashText, type SearchIndex } from '../index/index.ts'
 import { log } from '../log.ts'
@@ -14,7 +14,10 @@ import {
   type MemorizeResult,
   type Memory,
   type RecallInput,
+  type Reference,
+  type ReferenceSummary,
   SatchelError,
+  type SaveReferenceInput,
   type Store,
   type Topic,
 } from '../types.ts'
@@ -26,12 +29,18 @@ import {
   randomId,
   renderCheckpoint,
   renderMemory,
+  renderReference,
 } from './memory-files.ts'
 import { type ScannedFile, scanRepo } from './repo-scan.ts'
 import { createRepoWatcher } from './repo-watcher.ts'
 import { safePathSegment, slugifyBody } from './slug.ts'
 import { createTopicsFile } from './topics-file.ts'
-import { cleanClientName, validateCheckpoint, validateMemorize } from './validation.ts'
+import {
+  cleanClientName,
+  validateCheckpoint,
+  validateMemorize,
+  validateReference,
+} from './validation.ts'
 import { createWriteQueue } from './write-queue.ts'
 
 const WATCH_DEBOUNCE_MS = 200
@@ -113,7 +122,7 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
     return `${action}: ${subject} (via ${source})`
   }
 
-  function newId(prefix: 'm' | 'c'): string {
+  function newId(prefix: 'm' | 'c' | 'r'): string {
     const id = randomId(prefix, randomBytes(8))
     return index.pathOfId(id) === undefined ? id : newId(prefix)
   }
@@ -130,6 +139,8 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
     const indexers = {
       memory: (f: Extract<ScannedFile, { kind: 'memory' }>) =>
         index.upsertMemory({ path: f.path, hash: f.hash, memory: f.memory }),
+      reference: (f: Extract<ScannedFile, { kind: 'reference' }>) =>
+        index.upsertReference({ path: f.path, hash: f.hash, reference: f.reference }),
       checkpoint: (f: Extract<ScannedFile, { kind: 'checkpoint' }>) =>
         index.upsertCheckpoint({ path: f.path, hash: f.hash, checkpoint: f.checkpoint }),
       malformed: (f: Extract<ScannedFile, { kind: 'malformed' }>) => {
@@ -139,6 +150,7 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
     }
     try {
       if (file.kind === 'memory') return indexers.memory(file)
+      if (file.kind === 'reference') return indexers.reference(file)
       if (file.kind === 'checkpoint') return indexers.checkpoint(file)
       return indexers.malformed(file)
     } catch (error) {
@@ -174,10 +186,18 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
   async function topics(): Promise<Topic[]> {
     const triggers = await topicsFile.read()
     const counts = index.topicCounts()
-    const names = new Set([...triggers.keys(), ...counts.keys()])
-    return [...names]
-      .map((name) => ({ name, trigger: triggers.get(name) ?? '', count: counts.get(name) ?? 0 }))
-      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+    const referenceCounts = index.referenceTopicCounts()
+    const names = new Set([...triggers.keys(), ...counts.keys(), ...referenceCounts.keys()])
+    const topicOf = (name: string) => {
+      const references = referenceCounts.get(name) ?? 0
+      return {
+        name,
+        trigger: triggers.get(name) ?? '',
+        count: counts.get(name) ?? 0,
+        ...(references === 0 ? {} : { references }),
+      }
+    }
+    return [...names].map(topicOf).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
   }
 
   async function hosts(): Promise<Host[]> {
@@ -207,6 +227,32 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
       tags,
       queryVector,
     })
+  }
+
+  async function findReferences(input: RecallInput): Promise<ReferenceSummary[]> {
+    const query = undefinedIfEmpty(input.query)
+    const topic = undefinedIfEmpty(input.topic)
+    const host = undefinedIfEmpty(input.host)
+    const { filetypes, tags } = input
+    const labelled = filetypes !== undefined || tags !== undefined
+    return index.findReferences({
+      query,
+      topic,
+      project: undefinedIfEmpty(input.project),
+      host,
+      hostScopedOnly: query === undefined && topic === undefined && !labelled,
+      filetypes,
+      tags,
+      limit: REFERENCES_LISTED_MAX,
+    })
+  }
+
+  async function read(id: string) {
+    const memory = index.getMemory(id)
+    if (memory) return { kind: 'memory' as const, memory }
+    const reference = index.getReference(id)
+    if (reference) return { kind: 'reference' as const, reference }
+    throw new SatchelError('not_found', `No memory or reference with id "${id}".`)
   }
 
   async function logRecall(input: { ids: string[]; client: string }) {
@@ -311,6 +357,61 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
     return { memory, similar }
   }
 
+  /** Creates the topic in topics.yaml when needed; returns the paths it changed. */
+  async function ensureTopic(name: string, trigger: string | undefined): Promise<string[]> {
+    const knownTopics = await topicsFile.read()
+    if (knownTopics.has(name)) return []
+    if (trigger === undefined) throw await unknownTopicError(name)
+    await writeRepoFile('topics.yaml', await topicsFile.withTopic({ name, trigger }))
+    return ['topics.yaml']
+  }
+
+  function requireReference(id: string): Reference {
+    const reference = index.getReference(id)
+    if (!reference) throw new SatchelError('not_found', `No reference with id "${id}".`)
+    return reference
+  }
+
+  async function saveReferenceLocked(input: SaveReferenceInput): Promise<Reference> {
+    const fields = validateReference(input)
+    const source = cleanClientName(input.source)
+    const replaced = input.replaces === undefined ? undefined : requireReference(input.replaces)
+    const topicPaths = await ensureTopic(fields.topic, fields.topicTrigger)
+    const timestamp = formatTimestamp(now())
+    const id = replaced?.id ?? newId('r')
+    const reference: Reference = {
+      id,
+      topic: fields.topic,
+      title: fields.title,
+      description: fields.description,
+      scope: fields.scope,
+      ...(fields.project === undefined ? {} : { project: fields.project }),
+      ...(fields.host === undefined ? {} : { host: fields.host }),
+      ...(fields.filetypes === undefined ? {} : { filetypes: fields.filetypes }),
+      ...(fields.tags === undefined ? {} : { tags: fields.tags }),
+      format: fields.format,
+      created: replaced?.created ?? timestamp,
+      updated: timestamp,
+      source,
+      content: fields.content,
+    }
+    const oldPath = replaced ? index.pathOfId(id) : undefined
+    const path = `references/${fields.topic}/${slugifyBody(fields.title)}-${id}.md`
+    const content = renderReference(reference)
+    await writeRepoFile(path, content)
+    if (oldPath !== undefined && oldPath !== path) {
+      index.deleteByPath(oldPath)
+      await removeRepoFile(oldPath)
+    }
+    index.upsertReference({ path, hash: hashContent(content), reference })
+    const moved = oldPath !== undefined && oldPath !== path ? [oldPath] : []
+    await repo.commit({
+      paths: [path, ...moved, ...topicPaths],
+      message: commitMessage(replaced ? 'update' : 'reference', `${id} in ${fields.topic}`, source),
+    })
+    return reference
+  }
+
   async function forgetLocked(id: string, rawSource: string) {
     const path = index.pathOfId(id)
     if (path === undefined)
@@ -380,6 +481,9 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
     core,
     topics,
     recall,
+    findReferences,
+    read,
+    saveReference: (input) => queue.run(() => saveReferenceLocked(input)),
     logRecall,
     labels,
     memorize: (input) => queue.run(() => memorizeLocked(input)),

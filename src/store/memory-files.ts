@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import type { Checkpoint, Memory, Scope } from '../types.ts'
+import type { Checkpoint, Memory, Reference, Scope } from '../types.ts'
 import {
   optionalString,
   optionalStringList,
@@ -9,7 +9,9 @@ import {
 } from './frontmatter.ts'
 
 const ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz234567'
-const ID_PATTERN = /^[mc]_[a-z2-7]{8}$/
+const ID_PATTERN = /^[mcr]_[a-z2-7]{8}$/
+const UNFENCED_FORMAT = 'markdown'
+const MIN_FENCE = 3
 
 const SCOPE_BY_NAME: Record<string, Scope> = { global: 'global', project: 'project', host: 'host' }
 
@@ -29,12 +31,12 @@ export function isValidId(id: string): boolean {
   return ID_PATTERN.test(id)
 }
 
-export function randomId(prefix: 'm' | 'c', randomBytes: Uint8Array): string {
+export function randomId(prefix: 'm' | 'c' | 'r', randomBytes: Uint8Array): string {
   const chars = [...randomBytes.slice(0, 8)].map((byte) => ID_ALPHABET[byte % ID_ALPHABET.length])
   return `${prefix}_${chars.join('')}`
 }
 
-function requireId(data: Record<string, unknown>, prefix: 'm' | 'c'): string {
+function requireId(data: Record<string, unknown>, prefix: 'm' | 'c' | 'r'): string {
   const id = requiredString(data, 'id')
   if (!isValidId(id) || !id.startsWith(`${prefix}_`)) throw new Error(`invalid id "${id}"`)
   return id
@@ -109,5 +111,73 @@ export function renderCheckpoint(checkpoint: Checkpoint): string {
       source: checkpoint.source,
     },
     body: checkpoint.summary,
+  })
+}
+
+/** A fence longer than any backtick run in the content, so the content never closes it. */
+function fenceFor(content: string): string {
+  const longest = Math.max(0, ...(content.match(/`+/g) ?? []).map((run) => run.length))
+  return '`'.repeat(Math.max(MIN_FENCE, longest + 1))
+}
+
+function fencedBody(content: string, format: string): string {
+  if (format === UNFENCED_FORMAT) return content
+  const fence = fenceFor(content)
+  return `${fence}${format}\n${content}\n${fence}`
+}
+
+/** The content inside the one fenced block a reference body holds; the whole body otherwise. */
+function unfencedContent(body: string, format: string): string {
+  if (format === UNFENCED_FORMAT) return body
+  const match = /^(`{3,})[^\n`]*\n([\s\S]*?)\n\1[ \t]*$/.exec(body)
+  return match?.[2] ?? body
+}
+
+export function parseReference(raw: string): Reference {
+  const { data, body } = parseFrontmatter(raw)
+  const scope = SCOPE_BY_NAME[optionalString(data, 'scope') ?? 'global']
+  if (!scope) throw new Error(`invalid scope "${String(data.scope)}"`)
+  const format = optionalString(data, 'format') ?? UNFENCED_FORMAT
+  const project = optionalString(data, 'project')
+  const host = optionalString(data, 'host')
+  const filetypes = optionalStringList(data, 'filetypes')
+  const tags = optionalStringList(data, 'tags')
+  const created = requiredString(data, 'created')
+  return {
+    id: requireId(data, 'r'),
+    topic: requiredString(data, 'topic'),
+    title: requiredString(data, 'title'),
+    description: optionalString(data, 'description') ?? '',
+    scope,
+    ...(scope === 'project' && project !== undefined ? { project } : {}),
+    ...(scope === 'host' && host !== undefined ? { host } : {}),
+    ...(filetypes === undefined ? {} : { filetypes }),
+    ...(tags === undefined ? {} : { tags }),
+    format,
+    created,
+    updated: optionalString(data, 'updated') ?? created,
+    source: optionalString(data, 'source') ?? 'unknown',
+    content: unfencedContent(body, format),
+  }
+}
+
+export function renderReference(reference: Reference): string {
+  return renderFrontmatter({
+    data: {
+      id: reference.id,
+      topic: reference.topic,
+      title: reference.title,
+      description: reference.description,
+      scope: reference.scope,
+      ...(reference.project === undefined ? {} : { project: reference.project }),
+      ...(reference.host === undefined ? {} : { host: reference.host }),
+      ...(reference.filetypes?.length ? { filetypes: reference.filetypes } : {}),
+      ...(reference.tags?.length ? { tags: reference.tags } : {}),
+      format: reference.format,
+      created: reference.created,
+      updated: reference.updated,
+      source: reference.source,
+    },
+    body: fencedBody(reference.content, reference.format),
   })
 }

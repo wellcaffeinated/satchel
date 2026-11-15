@@ -12,6 +12,10 @@ import {
   PROJECT_MAX_CHARS,
   RECALL_DEFAULT_LIMIT,
   RECALL_MAX_LIMIT,
+  REFERENCE_DESCRIPTION_MAX_CHARS,
+  REFERENCE_FORMAT_PATTERN,
+  REFERENCE_MAX_CHARS,
+  REFERENCE_TITLE_MAX_CHARS,
   REQUEST_LABELS_MAX_COUNT,
   TAG_PATTERN,
   TOPIC_NAME_MAX_CHARS,
@@ -19,7 +23,8 @@ import {
   TRIGGER_MAX_CHARS,
 } from '../config.ts'
 
-const MEMORY_ID_PATTERN = /^[mc]_[a-z0-9]{8}$/
+const MEMORY_ID_PATTERN = /^[mcr]_[a-z0-9]{8}$/
+const MEMORY_OR_REFERENCE_ID_PATTERN = /^[mr]_[a-z0-9]{8}$/
 const COMMIT_PATTERN = /^\S+$/
 const QUERY_MAX_CHARS = 500
 
@@ -162,7 +167,42 @@ export const memorizeShape = {
 }
 
 export const forgetShape = {
-  id: z.string().regex(MEMORY_ID_PATTERN, 'id looks like m_xxxxxxxx or c_xxxxxxxx'),
+  id: z.string().regex(MEMORY_ID_PATTERN, 'id looks like m_xxxxxxxx, r_xxxxxxxx or c_xxxxxxxx'),
+}
+
+export const readShape = {
+  id: z
+    .string()
+    .regex(MEMORY_OR_REFERENCE_ID_PATTERN, 'id looks like r_xxxxxxxx or m_xxxxxxxx')
+    .describe('A reference (r_...) or memory (m_...) id'),
+}
+
+export const saveReferenceShape = {
+  title: z.string().min(1).max(REFERENCE_TITLE_MAX_CHARS).describe('What this is, in a few words'),
+  description: z
+    .string()
+    .min(1)
+    .max(REFERENCE_DESCRIPTION_MAX_CHARS)
+    .describe('One line: what it is for and when to use it; this is what search matches'),
+  content: z.string().min(1).max(REFERENCE_MAX_CHARS).describe('The material, verbatim'),
+  format: z
+    .string()
+    .regex(REFERENCE_FORMAT_PATTERN)
+    .optional()
+    .describe('Language of the content, e.g. "jsonc", "yaml", "sh"; default "markdown"'),
+  topic: topic.describe('Existing topic name, or a new one together with topic_trigger'),
+  scope: memorizeShape.scope,
+  project: project.optional(),
+  host: memorizeShape.host,
+  filetypes: memorizeShape.filetypes,
+  tags: memorizeShape.tags,
+  // biome-ignore lint/style/useNamingConvention: tool argument name fixed by docs/design.md
+  topic_trigger: memorizeShape.topic_trigger,
+  replaces: z
+    .string()
+    .regex(/^r_[a-z0-9]{8}$/)
+    .optional()
+    .describe('Id of a reference to rewrite in place'),
 }
 
 export const checkpointShape = {
@@ -189,4 +229,6 @@ export type BriefArgs = z.infer<typeof briefSchema>
 export type RecallArgs = z.infer<z.ZodObject<typeof recallShape>>
 export type MemorizeArgs = z.infer<z.ZodObject<typeof memorizeShape>>
 export type ForgetArgs = z.infer<z.ZodObject<typeof forgetShape>>
+export type ReadArgs = z.infer<z.ZodObject<typeof readShape>>
+export type SaveReferenceArgs = z.infer<z.ZodObject<typeof saveReferenceShape>>
 export type CheckpointArgs = z.infer<typeof checkpointSchema>

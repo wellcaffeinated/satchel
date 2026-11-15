@@ -108,7 +108,7 @@ describe('runMcp', () => {
     const code = await runMcp({ argv: [...flags(), '--list'], readState: noSandbox, ...out })
     expect(code).toBe(0)
     expect(out.output()).toMatch(/^--- brief \(\d+ chars\)$/m)
-    expect(out.output()).toContain('--- 5 tools,')
+    expect(out.output()).toContain('--- 7 tools,')
   })
 
   it('prints the instructions, then the result of one call', async () => {

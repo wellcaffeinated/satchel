@@ -3,11 +3,26 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import type { log } from '../log.ts'
 import { SatchelError } from '../types.ts'
-import { briefShape, checkpointShape, forgetShape, memorizeShape, recallShape } from './schemas.ts'
+import {
+  briefShape,
+  checkpointShape,
+  forgetShape,
+  memorizeShape,
+  readShape,
+  recallShape,
+  saveReferenceShape,
+} from './schemas.ts'
 import type { SatchelService } from './service.ts'
 
 type Log = typeof log
-type ToolName = 'brief' | 'recall' | 'memorize' | 'forget' | 'checkpoint'
+type ToolName =
+  | 'brief'
+  | 'recall'
+  | 'memorize'
+  | 'save_reference'
+  | 'read'
+  | 'forget'
+  | 'checkpoint'
 
 export const TOOL_DESCRIPTIONS = {
   brief:
@@ -16,8 +31,12 @@ export const TOOL_DESCRIPTIONS = {
     'Fetch stored memories. Call before work that matches a topic trigger, when the user refers to an earlier session, before guessing at a convention or preference, and before writing code that the brief did not load rules for. Give `query` to search, `topic` to list a topic, or `filetypes` and `tags` to load the rules for some work (e.g. filetypes ["py"], tags ["code"]); they combine. Pass `project` and `host` so local memories rank first. Results are whole memories in pages: when a page ends with "Next page", call again with that `offset` until you have them all.',
   memorize:
     'Save one durable rule or fact. Call when the user asks you to remember something, corrects you, states a preference, or you learn something non-obvious that would have saved time. First paragraph: the rule, 1-5 self-contained sentences; examples (e.g. a BAD/GOOD code block) may follow. Not for what the repo already records, secrets, or task progress (use `checkpoint`). scope: global by default, including any preference, even one stated on a particular machine; project only for facts about that repository; host only for facts about that machine itself. Set `filetypes` (["ts"]) or `tags` (["code"] for any code, a library like ["rxjs"]) only when the rule is limited to that work: it then loads automatically for it. Use an existing topic; a new one needs `topic_trigger` ("read before ..."). If similar memories come back, merge with `replaces`.',
+  // biome-ignore lint/style/useNamingConvention: tool name fixed by docs/design.md
+  save_reference:
+    'Save verbatim material to consult or copy later: a config file (biome.json), a template, a checklist, a script. Give a short `title` and a one-line `description` of what it is for: they are what search matches and what listings show. `content` is stored exactly as given; `format` is its language. Use `memorize` for rules and facts; references are never loaded automatically, only listed by `recall` and `brief`, and fetched with `read`. topic, scope, filetypes and tags work as for `memorize`.',
+  read: 'Return the full content of a reference (r_...) that `recall` or `brief` listed, or of a memory (m_...).',
   forget:
-    'Delete a memory (m_...) or checkpoint (c_...) by id. Call when the user asks you to forget something, or a memory is wrong or obsolete and not worth rewriting with `memorize` + `replaces`.',
+    'Delete a memory (m_...), reference (r_...) or checkpoint (c_...) by id. Call when the user asks you to forget something, or a memory is wrong or obsolete and not worth rewriting with `memorize` + `replaces`.',
   checkpoint:
     'Record where work stopped on one branch of one project so a later session can resume. Call when stopping work on a branch (end of session, hand-off, switching branches) with the HEAD commit and a 1-3 sentence summary: what is done, what is next, what blocks. Overwrites the previous checkpoint for that branch; omitting `summary` keeps the stored one. `done: true` deletes it once the branch is merged or abandoned.',
 } satisfies Record<ToolName, string>
@@ -86,6 +105,31 @@ export function registerSatchelTools(
       },
     },
     (args) => run('memorize', () => service.memorize(args, client)),
+  )
+  server.registerTool(
+    'save_reference',
+    {
+      title: 'Save a reference',
+      description: TOOL_DESCRIPTIONS.save_reference,
+      inputSchema: saveReferenceShape,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    (args) => run('save_reference', () => service.saveReference(args, client)),
+  )
+  server.registerTool(
+    'read',
+    {
+      title: 'Read a reference',
+      description: TOOL_DESCRIPTIONS.read,
+      inputSchema: readShape,
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+    },
+    (args) => run('read', () => service.read(args, client)),
   )
   server.registerTool(
     'forget',

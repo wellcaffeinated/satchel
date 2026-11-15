@@ -8,6 +8,11 @@ export const INSTRUCTIONS_MAX_CHARS = 3_800
 // A rule plus its examples; the first paragraph is the rule. See docs/design.md.
 export const MEMORY_MAX_CHARS = 6_000
 export const CHECKPOINT_SUMMARY_MAX_CHARS = 3_000
+export const REFERENCE_MAX_CHARS = 64_000
+export const REFERENCE_TITLE_MAX_CHARS = 120
+export const REFERENCE_DESCRIPTION_MAX_CHARS = 300
+export const REFERENCE_FORMAT_PATTERN = /^[a-z0-9][a-z0-9+#-]{0,19}$/
+export const REFERENCES_LISTED_MAX = 20
 export const LABELS_MAX_COUNT = 10
 export const LABEL_MAX_CHARS = 32
 export const FILETYPE_PATTERN = /^[a-z0-9]+$/

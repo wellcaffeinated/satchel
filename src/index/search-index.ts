@@ -2,11 +2,11 @@ import { createHash } from 'node:crypto'
 import { renameSync, rmSync } from 'node:fs'
 import { DatabaseSync, type SQLInputValue, type SQLOutputValue } from 'node:sqlite'
 import { log } from '../log.ts'
-import type { Checkpoint, Memory, Scope } from '../types.ts'
+import type { Checkpoint, Memory, Reference, ReferenceSummary, Scope } from '../types.ts'
 import { matchQueryFromTokens, tokenize, toMatchQuery } from './fts-query.ts'
 import { cosine, reciprocalRankFusion } from './rank.ts'
 
-const SCHEMA_VERSION = 2
+const SCHEMA_VERSION = 3
 /** Candidates taken from each ranked list before fusion. */
 const CANDIDATES_PER_LIST = 100
 /** Cosine below this is noise, not a paraphrase. Tuned against bge-small. */
@@ -19,7 +19,16 @@ const SIMILAR_MIN_SHARED_TERMS = 2
 const SIMILAR_MIN_SHARED_RATIO = 0.3
 const BYTES_PER_FLOAT = 4
 
-const INDEX_TABLES = ['files', 'memories', 'labels', 'checkpoints', 'memories_fts', 'vectors']
+const INDEX_TABLES = [
+  'files',
+  'memories',
+  'labels',
+  'reference_docs',
+  'reference_docs_fts',
+  'checkpoints',
+  'memories_fts',
+  'vectors',
+]
 
 const CREATE_INDEX_TABLES = `
   CREATE TABLE files(path TEXT PRIMARY KEY, hash TEXT NOT NULL, kind TEXT NOT NULL, id TEXT NOT NULL);
@@ -33,6 +42,13 @@ const CREATE_INDEX_TABLES = `
   CREATE TABLE labels(id TEXT NOT NULL, kind TEXT NOT NULL, value TEXT NOT NULL);
   CREATE INDEX labels_id ON labels(id, kind);
   CREATE INDEX labels_value ON labels(kind, value);
+  CREATE TABLE reference_docs(
+    id TEXT PRIMARY KEY, topic TEXT NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL,
+    scope TEXT NOT NULL, project TEXT, host TEXT, filetypes TEXT NOT NULL, tags TEXT NOT NULL,
+    format TEXT NOT NULL, created TEXT NOT NULL, updated TEXT NOT NULL, source TEXT NOT NULL,
+    content TEXT NOT NULL);
+  CREATE VIRTUAL TABLE reference_docs_fts USING fts5(
+    id UNINDEXED, title, description, topic, tokenize = 'porter unicode61');
   CREATE TABLE checkpoints(
     id TEXT PRIMARY KEY, project TEXT NOT NULL, branch TEXT NOT NULL, commit_hash TEXT NOT NULL,
     updated TEXT NOT NULL, source TEXT NOT NULL, summary TEXT NOT NULL, UNIQUE(project, branch));
@@ -90,8 +106,14 @@ export interface SearchIndex {
   upsertCheckpoint(input: { path: string; hash: string; checkpoint: Checkpoint }): void
   deleteByPath(path: string): void
   pathOfId(id: string): string | undefined
-  kindOfId(id: string): 'memory' | 'checkpoint' | undefined
+  kindOfId(id: string): 'memory' | 'reference' | 'checkpoint' | undefined
   getMemory(id: string): Memory | undefined
+  upsertReference(input: { path: string; hash: string; reference: Reference }): void
+  getReference(id: string): Reference | undefined
+  /** References matching the filter (and query, when given), without content. */
+  findReferences(input: SearchFilter & { query?: string; limit: number }): ReferenceSummary[]
+  /** topic -> number of references. */
+  referenceTopicCounts(): Map<string, number>
   findCheckpoint(project: string, branch: string): Checkpoint | undefined
   listCheckpoints(project: string, branch?: string): Checkpoint[]
   topicCounts(): Map<string, number>
@@ -146,6 +168,28 @@ function toMemory(row: Row): Memory {
     updated: text(row, 'updated'),
     source: text(row, 'source'),
     text: text(row, 'text'),
+  }
+}
+
+function toReferenceSummary(row: Row): ReferenceSummary {
+  const project = optionalText(row, 'project')
+  const host = optionalText(row, 'host')
+  const filetypes = labelList(row, 'filetypes')
+  const tags = labelList(row, 'tags')
+  return {
+    id: text(row, 'id'),
+    topic: text(row, 'topic'),
+    title: text(row, 'title'),
+    description: text(row, 'description'),
+    scope: SCOPE_BY_NAME[text(row, 'scope')] ?? 'global',
+    ...(project === undefined ? {} : { project }),
+    ...(host === undefined ? {} : { host }),
+    ...(filetypes.length === 0 ? {} : { filetypes }),
+    ...(tags.length === 0 ? {} : { tags }),
+    format: text(row, 'format'),
+    created: text(row, 'created'),
+    updated: text(row, 'updated'),
+    source: text(row, 'source'),
   }
 }
 
@@ -297,6 +341,8 @@ export function createSearchIndex({ path }: { path: string }): SearchIndex {
     run('DELETE FROM memories_fts WHERE id = ?', [id])
     run('DELETE FROM vectors WHERE id = ?', [id])
     run('DELETE FROM checkpoints WHERE id = ?', [id])
+    run('DELETE FROM reference_docs WHERE id = ?', [id])
+    run('DELETE FROM reference_docs_fts WHERE id = ?', [id])
   }
 
   function claimId({ id, path: filePath }: { id: string; path: string }): void {
@@ -359,6 +405,75 @@ export function createSearchIndex({ path }: { path: string }): SearchIndex {
         value ?? '',
       ])
     }
+  }
+
+  function upsertReference({
+    path: filePath,
+    hash,
+    reference,
+  }: Parameters<SearchIndex['upsertReference']>[0]) {
+    transaction(() => {
+      claimId({ id: reference.id, path: filePath })
+      removeRowsForId(reference.id)
+      run('DELETE FROM files WHERE path = ?', [filePath])
+      run('INSERT INTO files(path, hash, kind, id) VALUES (?, ?, ?, ?)', [
+        filePath,
+        hash,
+        'reference',
+        reference.id,
+      ])
+      run(
+        `INSERT INTO reference_docs(id, topic, title, description, scope, project, host, filetypes,
+           tags, format, created, updated, source, content)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          reference.id,
+          reference.topic,
+          reference.title,
+          reference.description,
+          reference.scope,
+          reference.project ?? null,
+          reference.host ?? null,
+          JSON.stringify(reference.filetypes ?? []),
+          JSON.stringify(reference.tags ?? []),
+          reference.format,
+          reference.created,
+          reference.updated,
+          reference.source,
+          reference.content,
+        ],
+      )
+      run('INSERT INTO reference_docs_fts(id, title, description, topic) VALUES (?, ?, ?, ?)', [
+        reference.id,
+        reference.title,
+        reference.description,
+        reference.topic,
+      ])
+      insertLabels({ id: reference.id, filetypes: reference.filetypes, tags: reference.tags })
+    })
+  }
+
+  function getReference(id: string): Reference | undefined {
+    const row = one('SELECT * FROM reference_docs WHERE id = ?', [id])
+    return row ? { ...toReferenceSummary(row), content: text(row, 'content') } : undefined
+  }
+
+  function findReferences(input: SearchFilter & { query?: string; limit: number }) {
+    const clause = filterClause(input)
+    const match = input.query?.trim() ? toMatchQuery(input.query) : undefined
+    if (input.query?.trim() && !match) return []
+    if (match) {
+      return all(
+        `SELECT m.* FROM reference_docs_fts JOIN reference_docs m ON m.id = reference_docs_fts.id
+         WHERE reference_docs_fts MATCH ? AND ${clause.sql}
+         ORDER BY bm25(reference_docs_fts, 0, 2.0, 1.0, 0.5), m.id LIMIT ?`,
+        [match, ...clause.params, input.limit],
+      ).map(toReferenceSummary)
+    }
+    return all(
+      `SELECT m.* FROM reference_docs m WHERE ${clause.sql} ORDER BY m.topic, m.title, m.id LIMIT ?`,
+      [...clause.params, input.limit],
+    ).map(toReferenceSummary)
   }
 
   function upsertCheckpoint({
@@ -590,7 +705,7 @@ export function createSearchIndex({ path }: { path: string }): SearchIndex {
     },
     kindOfId(id) {
       const kind = optionalText(one('SELECT kind FROM files WHERE id = ?', [id]) ?? {}, 'kind')
-      return kind === 'memory' || kind === 'checkpoint' ? kind : undefined
+      return kind === 'memory' || kind === 'reference' || kind === 'checkpoint' ? kind : undefined
     },
     getMemory,
     findCheckpoint(project, branch) {
@@ -607,10 +722,18 @@ export function createSearchIndex({ path }: { path: string }): SearchIndex {
           : all('SELECT * FROM checkpoints WHERE project = ? AND branch = ?', [project, branch])
       return rows.map(toCheckpoint)
     },
+    upsertReference,
+    getReference,
+    findReferences,
+    referenceTopicCounts() {
+      const rows = all('SELECT topic, count(*) AS n FROM reference_docs GROUP BY topic')
+      return new Map(rows.map((row) => [text(row, 'topic'), Number(row.n)]))
+    },
     labelCounts() {
+      // Memories only: these lines say what can be loaded, and references never are.
       return all(
-        `SELECT kind, value, count(*) AS n FROM labels
-         GROUP BY kind, value ORDER BY kind, n DESC, value`,
+        `SELECT l.kind, l.value, count(*) AS n FROM labels l JOIN memories m ON m.id = l.id
+         GROUP BY l.kind, l.value ORDER BY l.kind, n DESC, l.value`,
       ).map((row) => ({ kind: text(row, 'kind'), value: text(row, 'value'), count: Number(row.n) }))
     },
     topicCounts() {

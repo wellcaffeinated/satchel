@@ -8,7 +8,16 @@ import {
   TOPIC_NAME_MAX_CHARS,
   TRIGGER_MAX_CHARS,
 } from '../config.ts'
-import type { Checkpoint, Host, LabelCount, Labels, Memory, Topic } from '../types.ts'
+import type {
+  Checkpoint,
+  Host,
+  LabelCount,
+  Labels,
+  Memory,
+  Reference,
+  ReferenceSummary,
+  Topic,
+} from '../types.ts'
 import type { Page } from './paging.ts'
 import { flattenLine, indentContinuation, isoDate, isoMinute } from './text.ts'
 
@@ -55,9 +64,10 @@ export interface WorkLabels {
 export interface LoadedForWork {
   work: WorkLabels
   page: Page<Memory>
+  references: ReferenceSummary[]
 }
 
-function scopeLabel(memory: Memory): string {
+function scopeLabel(memory: Pick<Memory, 'scope' | 'project' | 'host'>): string {
   const scopeLabels: Record<Memory['scope'], () => string> = {
     global: () => 'global',
     project: () => `project ${flattenLine(memory.project ?? '?', PROJECT_MAX_CHARS)}`,
@@ -86,6 +96,42 @@ export function renderMemory(memory: Memory): string {
   return `${header} ${indentContinuation(memory.text, ENTRY_INDENT)}`
 }
 
+const REFERENCE_TITLE_SHOWN_CHARS = 120
+const REFERENCE_DESCRIPTION_SHOWN_CHARS = 300
+const UNFENCED_FORMAT = 'markdown'
+const MIN_FENCE = 3
+
+/** `- r_x [topic | reference | scope | labels] Title: description`, one line. */
+export function renderReferenceLine(reference: ReferenceSummary): string {
+  const topic = flattenLine(reference.topic, TOPIC_NAME_MAX_CHARS)
+  const parts = [topic, 'reference', scopeLabel(reference), ...labelParts(reference)]
+  const title = flattenLine(reference.title, REFERENCE_TITLE_SHOWN_CHARS)
+  const description = flattenLine(reference.description, REFERENCE_DESCRIPTION_SHOWN_CHARS)
+  return `- ${flattenLine(reference.id, 16)} [${parts.join(' | ')}] ${title}: ${description}`
+}
+
+export function renderReferenceList(references: ReferenceSummary[]): string[] {
+  if (references.length === 0) return []
+  return ['References (get one with `read`):', ...references.map(renderReferenceLine)]
+}
+
+/** A fence longer than any backtick run in the content, so the content cannot close it. */
+function fenceFor(content: string): string {
+  const longest = Math.max(0, ...(content.match(/`+/g) ?? []).map((run) => run.length))
+  return '`'.repeat(Math.max(MIN_FENCE, longest + 1))
+}
+
+/** A whole reference, for `read`: header, description, then the content verbatim. */
+export function renderReference(reference: Reference): string {
+  const header = renderReferenceLine(reference).replace(/^- /, '')
+  const fence = fenceFor(reference.content)
+  const content =
+    reference.format === UNFENCED_FORMAT
+      ? reference.content
+      : `${fence}${flattenLine(reference.format, 20)}\n${reference.content}\n${fence}`
+  return `${header}\nUpdated ${isoDate(reference.updated)} by ${flattenLine(reference.source, SOURCE_MAX_CHARS)}.\n\n${content}`
+}
+
 export function renderMemories(memories: Memory[]): string {
   return memories.map(renderMemory).join('\n')
 }
@@ -93,7 +139,8 @@ export function renderMemories(memories: Memory[]): string {
 export function renderTopicLine(topic: Topic): string {
   const name = flattenLine(topic.name, TOPIC_NAME_MAX_CHARS)
   const trigger = flattenLine(topic.trigger, TRIGGER_MAX_CHARS)
-  return `- ${name} (${topic.count}): ${trigger || '(no trigger)'}`
+  const references = topic.references ? `, ${topic.references} ref` : ''
+  return `- ${name} (${topic.count}${references}): ${trigger || '(no trigger)'}`
 }
 
 /** One line, so a stored commit cannot add lines to the brief. */
@@ -170,14 +217,15 @@ function workArguments(work: WorkLabels): string {
 function renderLoaded(loaded: LoadedForWork): string {
   const heading = `## Loaded for this work (${describeWork(loaded.work)})`
   const { page } = loaded
-  if (page.total === 0) return `${heading}\nNo memories match this work.`
+  const references = renderReferenceList(loaded.references)
+  if (page.total === 0) return [heading, 'No memories match this work.', ...references].join('\n')
   const rest =
     page.end < page.total
       ? [
           `Loaded ${page.end} of ${page.total}. Load the rest: call recall with ${workArguments(loaded.work)} and offset=${page.end}.`,
         ]
       : []
-  return [heading, renderMemories(page.items), ...rest].join('\n')
+  return [heading, renderMemories(page.items), ...rest, ...references].join('\n')
 }
 
 /** The line after a recall page, when there is anything more to say. */
