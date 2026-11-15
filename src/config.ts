@@ -5,7 +5,13 @@ import { resolve } from 'node:path'
 export const CORE_MAX_CHARS = 4_000
 // Claude Code truncates instructions at 4,096; the margin is for its own framing.
 export const INSTRUCTIONS_MAX_CHARS = 3_800
-export const MEMORY_MAX_CHARS = 1_500
+// A rule plus its examples; the first paragraph is the rule. See docs/design.md.
+export const MEMORY_MAX_CHARS = 6_000
+export const CHECKPOINT_SUMMARY_MAX_CHARS = 3_000
+export const LABELS_MAX_COUNT = 10
+export const LABEL_MAX_CHARS = 32
+export const FILETYPE_PATTERN = /^[a-z0-9]+$/
+export const TAG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 export const TOPIC_NAME_MAX_CHARS = 32
 export const TOPIC_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 export const TRIGGER_MAX_CHARS = 160

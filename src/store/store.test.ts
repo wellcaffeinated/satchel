@@ -115,17 +115,56 @@ describe('store', () => {
     })
 
     it.each([
-      ['too_long', { text: 'x'.repeat(1501) }],
+      ['too_long', { text: 'x'.repeat(6001) }],
       ['too_long', { topic: 'a'.repeat(33) }],
       ['invalid', { topic: 'Not Kebab' }],
       ['invalid', { topic: '../escape' }],
       ['invalid', { text: '   ' }],
       ['invalid', { scope: 'project' }],
+      ['invalid', { filetypes: ['.TS', 'not a type'] }],
+      ['invalid', { tags: ['Has Space'] }],
+      ['invalid', { tags: Array.from({ length: 11 }, (_, i) => `tag-${i}`) }],
     ] as const)('rejects bad input with %s', async (code, override) => {
       const store = await open()
       const error = await memorize(store, 'ok text', override).catch((e: unknown) => e)
       expect(error).toBeInstanceOf(SatchelError)
       expect((error as SatchelError).code).toBe(code)
+    })
+
+    it('keeps labels and examples, normalised, through the file and a fresh index', async () => {
+      const body = [
+        'Use an options object instead of a positional boolean.',
+        '',
+        '```ts',
+        'exportReport(report, { includeDrafts: true })',
+        '```',
+      ].join('\n')
+      const first = await open()
+      const { memory } = await memorize(first, body, {
+        filetypes: ['.TS', 'ts', 'js'],
+        tags: ['code'],
+      })
+      expect(memory).toMatchObject({ filetypes: ['ts', 'js'], tags: ['code'], text: body })
+      const file = readdirSync(join(repoDir(), 'memories', 'general'))[0] ?? ''
+      const raw = readFileSync(join(repoDir(), 'memories', 'general', file), 'utf8')
+      expect(raw).toContain('filetypes: [ ts, js ]')
+      expect(raw).toContain('tags: [ code ]')
+      await first.close()
+      rmSync(join(dataDir(), 'index.sqlite'), { force: true })
+      const second = await open()
+      const found = await second.recall({ query: 'options object', client: 'c' })
+      expect(found[0]).toMatchObject({ id: memory.id, filetypes: ['ts', 'js'], tags: ['code'] })
+    })
+
+    it('compares only first paragraphs when looking for similar memories', async () => {
+      const store = await open({ embedderLoader: fakeLoader() })
+      await store.embeddingsIdle()
+      const example = '\n\n```ts\nconst car = drive(automobile, vehicle)\n```'
+      await memorize(store, `Bake the bread loaf slowly.${example}`)
+      const { similar } = await memorize(store, `Bread loaves bake best slowly.${example}`)
+      expect(similar.map((m) => m.text.split('\n')[0])).toEqual(['Bake the bread loaf slowly.'])
+      const { similar: none } = await memorize(store, `Drive the car carefully.${example}`)
+      expect(none).toEqual([])
     })
 
     it('replaces in place, keeping id and created', async () => {

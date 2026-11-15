@@ -1,6 +1,7 @@
 import type { Embedder, EmbedderLoader } from '../embed/index.ts'
 import type { SearchIndex } from '../index/index.ts'
 import { log } from '../log.ts'
+import { leadParagraph } from './memory-files.ts'
 
 const BACKFILL_BATCH_SIZE = 16
 
@@ -52,7 +53,7 @@ export function createEmbeddingWorker({
     let pending = nextBatch()
     while (pending.length > 0 && !stopped) {
       const vectors = await active.embed(
-        pending.map((item) => item.text),
+        pending.map((item) => leadParagraph(item.text)),
         'passage',
       )
       if (vectors.length !== pending.length) throw new Error('embedder returned the wrong count')

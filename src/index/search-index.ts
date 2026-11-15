@@ -6,7 +6,7 @@ import type { Checkpoint, Memory, Scope } from '../types.ts'
 import { matchQueryFromTokens, tokenize, toMatchQuery } from './fts-query.ts'
 import { cosine, reciprocalRankFusion } from './rank.ts'
 
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
 /** Candidates taken from each ranked list before fusion. */
 const CANDIDATES_PER_LIST = 100
 /** Cosine below this is noise, not a paraphrase. Tuned against bge-small. */
@@ -19,16 +19,20 @@ const SIMILAR_MIN_SHARED_TERMS = 2
 const SIMILAR_MIN_SHARED_RATIO = 0.3
 const BYTES_PER_FLOAT = 4
 
-const INDEX_TABLES = ['files', 'memories', 'checkpoints', 'memories_fts', 'vectors']
+const INDEX_TABLES = ['files', 'memories', 'labels', 'checkpoints', 'memories_fts', 'vectors']
 
 const CREATE_INDEX_TABLES = `
   CREATE TABLE files(path TEXT PRIMARY KEY, hash TEXT NOT NULL, kind TEXT NOT NULL, id TEXT NOT NULL);
   CREATE INDEX files_id ON files(id);
   CREATE TABLE memories(
     id TEXT PRIMARY KEY, topic TEXT NOT NULL, scope TEXT NOT NULL, project TEXT, host TEXT,
+    filetypes TEXT NOT NULL, tags TEXT NOT NULL,
     created TEXT NOT NULL, updated TEXT NOT NULL, source TEXT NOT NULL, text TEXT NOT NULL,
     text_hash TEXT NOT NULL);
   CREATE INDEX memories_topic ON memories(topic);
+  CREATE TABLE labels(id TEXT NOT NULL, kind TEXT NOT NULL, value TEXT NOT NULL);
+  CREATE INDEX labels_id ON labels(id, kind);
+  CREATE INDEX labels_value ON labels(kind, value);
   CREATE TABLE checkpoints(
     id TEXT PRIMARY KEY, project TEXT NOT NULL, branch TEXT NOT NULL, commit_hash TEXT NOT NULL,
     updated TEXT NOT NULL, source TEXT NOT NULL, summary TEXT NOT NULL, UNIQUE(project, branch));
@@ -113,15 +117,25 @@ function optionalText(row: Row, key: string): string | undefined {
 
 const SCOPE_BY_NAME: Record<string, Scope> = { global: 'global', project: 'project', host: 'host' }
 
+/** Label lists are stored as JSON text beside the row, and one row each in `labels`. */
+function labelList(row: Row, key: string): string[] {
+  const parsed: unknown = JSON.parse(text(row, key) || '[]')
+  return Array.isArray(parsed) ? parsed.filter((item) => typeof item === 'string') : []
+}
+
 function toMemory(row: Row): Memory {
   const project = optionalText(row, 'project')
   const host = optionalText(row, 'host')
+  const filetypes = labelList(row, 'filetypes')
+  const tags = labelList(row, 'tags')
   return {
     id: text(row, 'id'),
     topic: text(row, 'topic'),
     scope: SCOPE_BY_NAME[text(row, 'scope')] ?? 'global',
     ...(project === undefined ? {} : { project }),
     ...(host === undefined ? {} : { host }),
+    ...(filetypes.length === 0 ? {} : { filetypes }),
+    ...(tags.length === 0 ? {} : { tags }),
     created: text(row, 'created'),
     updated: text(row, 'updated'),
     source: text(row, 'source'),
@@ -239,6 +253,7 @@ export function createSearchIndex({ path }: { path: string }): SearchIndex {
 
   function removeRowsForId(id: string): void {
     run('DELETE FROM memories WHERE id = ?', [id])
+    run('DELETE FROM labels WHERE id = ?', [id])
     run('DELETE FROM memories_fts WHERE id = ?', [id])
     run('DELETE FROM vectors WHERE id = ?', [id])
     run('DELETE FROM checkpoints WHERE id = ?', [id])
@@ -265,14 +280,17 @@ export function createSearchIndex({ path }: { path: string }): SearchIndex {
         memory.id,
       ])
       run(
-        `INSERT INTO memories(id, topic, scope, project, host, created, updated, source, text, text_hash)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO memories(id, topic, scope, project, host, filetypes, tags, created, updated,
+           source, text, text_hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           memory.id,
           memory.topic,
           memory.scope,
           memory.project ?? null,
           memory.host ?? null,
+          JSON.stringify(memory.filetypes ?? []),
+          JSON.stringify(memory.tags ?? []),
           memory.created,
           memory.updated,
           memory.source,
@@ -285,7 +303,22 @@ export function createSearchIndex({ path }: { path: string }): SearchIndex {
         memory.text,
         memory.topic,
       ])
+      insertLabels({ id: memory.id, filetypes: memory.filetypes, tags: memory.tags })
     })
+  }
+
+  function insertLabels(input: { id: string; filetypes?: string[]; tags?: string[] }): void {
+    const rows = [
+      ...(input.filetypes ?? []).map((value) => ['filetype', value]),
+      ...(input.tags ?? []).map((value) => ['tag', value]),
+    ]
+    for (const [kind, value] of rows) {
+      run('INSERT INTO labels(id, kind, value) VALUES (?, ?, ?)', [
+        input.id,
+        kind ?? '',
+        value ?? '',
+      ])
+    }
   }
 
   function upsertCheckpoint({

@@ -3,6 +3,7 @@ import {
   BRANCH_MAX_CHARS,
   COMMIT_MAX_CHARS,
   HOST_MAX_CHARS,
+  LABEL_MAX_CHARS,
   PROJECT_MAX_CHARS,
   TOPIC_NAME_MAX_CHARS,
   TRIGGER_MAX_CHARS,
@@ -47,10 +48,23 @@ function scopeLabel(memory: Memory): string {
   return (scopeLabels[memory.scope] ?? (() => flattenLine(String(memory.scope), 16)))()
 }
 
-/** `- m_x [topic | scope | date] text`, continuation lines indented. */
+function labelList(values: string[] | undefined): string {
+  return (values ?? []).map((value) => flattenLine(value, LABEL_MAX_CHARS)).join(', ')
+}
+
+/** `filetypes: ts, js` and `tags: rxjs`, only for the lists a memory has. */
+function labelParts(labelled: { filetypes?: string[]; tags?: string[] }): string[] {
+  return [
+    ...(labelled.filetypes?.length ? [`filetypes: ${labelList(labelled.filetypes)}`] : []),
+    ...(labelled.tags?.length ? [`tags: ${labelList(labelled.tags)}`] : []),
+  ]
+}
+
+/** `- m_x [topic | scope | labels | date] text`, continuation lines indented. */
 export function renderMemory(memory: Memory): string {
   const topic = flattenLine(memory.topic, TOPIC_NAME_MAX_CHARS)
-  const header = `- ${flattenLine(memory.id, 16)} [${topic} | ${scopeLabel(memory)} | ${isoDate(memory.updated)}]`
+  const parts = [topic, scopeLabel(memory), ...labelParts(memory), isoDate(memory.updated)]
+  const header = `- ${flattenLine(memory.id, 16)} [${parts.join(' | ')}]`
   return `${header} ${indentContinuation(memory.text, ENTRY_INDENT)}`
 }
 

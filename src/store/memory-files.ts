@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type { Checkpoint, Memory, Scope } from '../types.ts'
 import {
   optionalString,
+  optionalStringList,
   parseFrontmatter,
   renderFrontmatter,
   requiredString,
@@ -11,6 +12,14 @@ const ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz234567'
 const ID_PATTERN = /^[mc]_[a-z2-7]{8}$/
 
 const SCOPE_BY_NAME: Record<string, Scope> = { global: 'global', project: 'project', host: 'host' }
+
+/**
+ * The rule a memory states: its first paragraph. Embeddings and the similar-memory check
+ * use only this, so code examples do not make unrelated rules look alike.
+ */
+export function leadParagraph(text: string): string {
+  return text.trim().split(/\n[ \t]*\n/, 1)[0] ?? ''
+}
 
 export function hashContent(content: string): string {
   return createHash('sha1').update(content).digest('hex')
@@ -41,12 +50,16 @@ export function parseMemory(raw: string): Memory {
   if (scope === 'project' && project === undefined) throw new Error('project scope without project')
   if (scope === 'host' && host === undefined) throw new Error('host scope without host')
   const created = requiredString(data, 'created')
+  const filetypes = optionalStringList(data, 'filetypes')
+  const tags = optionalStringList(data, 'tags')
   return {
     id: requireId(data, 'm'),
     topic: requiredString(data, 'topic'),
     scope,
     ...(scope === 'project' && project !== undefined ? { project } : {}),
     ...(scope === 'host' && host !== undefined ? { host } : {}),
+    ...(filetypes === undefined ? {} : { filetypes }),
+    ...(tags === undefined ? {} : { tags }),
     created,
     updated: optionalString(data, 'updated') ?? created,
     source: optionalString(data, 'source') ?? 'unknown',
@@ -62,6 +75,8 @@ export function renderMemory(memory: Memory): string {
       scope: memory.scope,
       ...(memory.project === undefined ? {} : { project: memory.project }),
       ...(memory.host === undefined ? {} : { host: memory.host }),
+      ...(memory.filetypes?.length ? { filetypes: memory.filetypes } : {}),
+      ...(memory.tags?.length ? { tags: memory.tags } : {}),
       created: memory.created,
       updated: memory.updated,
       source: memory.source,

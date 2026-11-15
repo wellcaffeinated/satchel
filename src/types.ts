@@ -9,6 +9,8 @@ export interface Memory {
   scope: Scope
   project?: string // set when scope is "project"
   host?: string // set when scope is "host"
+  filetypes?: string[] // extensions without the dot; absent when empty
+  tags?: string[] // lowercase kebab-case labels; absent when empty
   created: string // ISO 8601 UTC
   updated: string
   source: string // client name of the writer
@@ -43,6 +45,8 @@ export interface MemorizeInput {
   scope?: Scope // default "global"
   project?: string
   host?: string
+  filetypes?: string[]
+  tags?: string[]
   topicTrigger?: string // required when the topic does not exist yet
   replaces?: string // id of a memory to rewrite in place
   source: string

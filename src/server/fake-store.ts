@@ -102,6 +102,8 @@ export function createFakeStore(seed: FakeStoreSeed = {}): FakeStore {
       scope: input.scope ?? 'global',
       project: input.project,
       host: input.host,
+      ...(input.filetypes?.length ? { filetypes: input.filetypes } : {}),
+      ...(input.tags?.length ? { tags: input.tags } : {}),
       created: previous?.created ?? FIXED_TIME,
       updated: FIXED_TIME,
       source: input.source,

@@ -85,6 +85,8 @@ export function createSatchelService(options: { store: Store }): SatchelService 
       scope: args.scope ?? 'global',
       project: args.project,
       host: args.host,
+      filetypes: args.filetypes,
+      tags: args.tags,
       topicTrigger: args.topic_trigger,
       replaces: args.replaces,
       source: client,

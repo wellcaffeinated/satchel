@@ -1,8 +1,13 @@
 import {
+  CHECKPOINT_SUMMARY_MAX_CHARS,
   CLIENT_NAME_MAX_CHARS,
+  FILETYPE_PATTERN,
+  LABEL_MAX_CHARS,
+  LABELS_MAX_COUNT,
   MEMORY_MAX_CHARS,
   RECALL_DEFAULT_LIMIT,
   RECALL_MAX_LIMIT,
+  TAG_PATTERN,
   TOPIC_NAME_MAX_CHARS,
   TOPIC_NAME_PATTERN,
   TRIGGER_MAX_CHARS,
@@ -11,7 +16,6 @@ import { type CheckpointInput, type MemorizeInput, SatchelError, type Scope } fr
 
 const IDENTIFIER_MAX_CHARS = 200
 const COMMIT_MAX_CHARS = 64
-const CHECKPOINT_SUMMARY_MAX_CHARS = MEMORY_MAX_CHARS * 2
 const UNKNOWN_CLIENT = 'unknown'
 
 export interface ValidMemoryFields {
@@ -20,6 +24,8 @@ export interface ValidMemoryFields {
   scope: Scope
   project?: string
   host?: string
+  filetypes?: string[]
+  tags?: string[]
   topicTrigger?: string
 }
 
@@ -86,6 +92,49 @@ const SCOPE_FIELDS: Record<Scope, (input: MemorizeInput) => { project?: string; 
   }),
 }
 
+const LABEL_RULES = {
+  filetypes: {
+    pattern: FILETYPE_PATTERN,
+    normalise: (value: string) => value.trim().toLowerCase().replace(/^\./, ''),
+    example: 'file extensions without the dot, such as "ts" or "py"',
+  },
+  tags: {
+    pattern: TAG_PATTERN,
+    normalise: (value: string) => value.trim().toLowerCase(),
+    example: 'lowercase kebab-case labels, such as "code" or "rxjs"',
+  },
+} satisfies Record<
+  'filetypes' | 'tags',
+  { pattern: RegExp; normalise: (v: string) => string; example: string }
+>
+
+/** Normalised, de-duplicated labels, or undefined when none. Throws on bad values. */
+export function validateLabels(
+  kind: keyof typeof LABEL_RULES,
+  values: string[] | undefined,
+): string[] | undefined {
+  if (values === undefined) return undefined
+  const rule = LABEL_RULES[kind]
+  const labels = [...new Set(values.map(rule.normalise).filter((value) => value !== ''))]
+  if (labels.length > LABELS_MAX_COUNT) {
+    throw new SatchelError('invalid', `At most ${LABELS_MAX_COUNT} ${kind}.`)
+  }
+  const bad = labels.find((label) => label.length > LABEL_MAX_CHARS || !rule.pattern.test(label))
+  if (bad !== undefined) {
+    throw new SatchelError('invalid', `Invalid ${kind} value "${bad}": use ${rule.example}.`)
+  }
+  return labels.length === 0 ? undefined : labels
+}
+
+function labelFields(input: { filetypes?: string[]; tags?: string[] }) {
+  const filetypes = validateLabels('filetypes', input.filetypes)
+  const tags = validateLabels('tags', input.tags)
+  return {
+    ...(filetypes === undefined ? {} : { filetypes }),
+    ...(tags === undefined ? {} : { tags }),
+  }
+}
+
 export function validateMemorize(input: MemorizeInput): ValidMemoryFields {
   const scope = input.scope ?? 'global'
   const scopeFields = SCOPE_FIELDS[scope]
@@ -95,6 +144,7 @@ export function validateMemorize(input: MemorizeInput): ValidMemoryFields {
     topic: validateTopicName(input.topic),
     scope,
     ...scopeFields(input),
+    ...labelFields(input),
     ...(input.topicTrigger === undefined
       ? {}
       : { topicTrigger: validateTrigger(input.topicTrigger) }),

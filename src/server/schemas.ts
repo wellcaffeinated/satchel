@@ -2,12 +2,17 @@
 import * as z from 'zod'
 import {
   BRANCH_MAX_CHARS,
+  CHECKPOINT_SUMMARY_MAX_CHARS,
   COMMIT_MAX_CHARS,
+  FILETYPE_PATTERN,
   HOST_MAX_CHARS,
+  LABEL_MAX_CHARS,
+  LABELS_MAX_COUNT,
   MEMORY_MAX_CHARS,
   PROJECT_MAX_CHARS,
   RECALL_DEFAULT_LIMIT,
   RECALL_MAX_LIMIT,
+  TAG_PATTERN,
   TOPIC_NAME_MAX_CHARS,
   TOPIC_NAME_PATTERN,
   TRIGGER_MAX_CHARS,
@@ -25,6 +30,24 @@ const project = z
     'Project id: git origin as host/owner/repo (e.g. github.com/me/app), else the directory name',
   )
 const branch = z.string().min(1).max(BRANCH_MAX_CHARS).describe('Git branch name')
+const filetypesLabel = z
+  .array(
+    z
+      .string()
+      .min(1)
+      .max(LABEL_MAX_CHARS)
+      .regex(FILETYPE_PATTERN, 'file types are extensions without the dot, e.g. "ts"'),
+  )
+  .max(LABELS_MAX_COUNT)
+const tagsLabel = z
+  .array(
+    z
+      .string()
+      .min(1)
+      .max(LABEL_MAX_CHARS)
+      .regex(TAG_PATTERN, 'tags are lowercase kebab-case, e.g. "code" or "rxjs"'),
+  )
+  .max(LABELS_MAX_COUNT)
 const thisHost = z
   .string()
   .min(1)
@@ -68,8 +91,10 @@ export const memorizeShape = {
   text: z
     .string()
     .min(1)
-    .max(MEMORY_MAX_CHARS, `text is over ${MEMORY_MAX_CHARS} characters; save one fact per call`)
-    .describe('The fact, 1-5 self-contained sentences'),
+    .max(MEMORY_MAX_CHARS, `text is over ${MEMORY_MAX_CHARS} characters; save one rule per call`)
+    .describe(
+      'First paragraph: the rule or fact, 1-5 self-contained sentences. Examples (e.g. a BAD/GOOD code block) may follow after a blank line',
+    ),
   topic: topic.describe('Existing topic name, or a new one together with topic_trigger'),
   scope: z
     .enum(['global', 'project', 'host'])
@@ -84,6 +109,14 @@ export const memorizeShape = {
     .max(HOST_MAX_CHARS)
     .optional()
     .describe('Machine name, used only with scope host. Not just where you are running'),
+  filetypes: filetypesLabel
+    .optional()
+    .describe('Only if the rule applies only to these file types: extensions, e.g. ["ts", "tsx"]'),
+  tags: tagsLabel
+    .optional()
+    .describe(
+      'Only if the rule applies only to this kind of work: ["code"] for any code, a library name such as ["rxjs"], an activity such as ["testing"]',
+    ),
   // biome-ignore lint/style/useNamingConvention: tool argument name fixed by docs/design.md
   topic_trigger: z
     .string()
@@ -113,7 +146,7 @@ export const checkpointShape = {
     .describe('Current HEAD commit hash'),
   summary: z
     .string()
-    .max(MEMORY_MAX_CHARS)
+    .max(CHECKPOINT_SUMMARY_MAX_CHARS)
     .optional()
     .describe('What is done, what is next, what blocks. Omit to keep the stored summary'),
   done: z.boolean().optional().describe('true deletes the checkpoint (branch merged or abandoned)'),

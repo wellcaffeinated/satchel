@@ -19,7 +19,13 @@ import {
 } from '../types.ts'
 import { createEmbeddingWorker } from './embedding-worker.ts'
 import { createGitRepo } from './git-repo.ts'
-import { hashContent, randomId, renderCheckpoint, renderMemory } from './memory-files.ts'
+import {
+  hashContent,
+  leadParagraph,
+  randomId,
+  renderCheckpoint,
+  renderMemory,
+} from './memory-files.ts'
 import { type ScannedFile, scanRepo } from './repo-scan.ts'
 import { createRepoWatcher } from './repo-watcher.ts'
 import { safePathSegment, slugifyBody } from './slug.ts'
@@ -243,6 +249,8 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
       scope: fields.scope,
       ...(fields.project === undefined ? {} : { project: fields.project }),
       ...(fields.host === undefined ? {} : { host: fields.host }),
+      ...(fields.filetypes === undefined ? {} : { filetypes: fields.filetypes }),
+      ...(fields.tags === undefined ? {} : { tags: fields.tags }),
       created: replaced?.created ?? timestamp,
       updated: timestamp,
       source,
@@ -276,7 +284,8 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
       message: commitMessage(replaced ? 'update' : 'memorize', `${id} in ${fields.topic}`, source),
     })
 
-    const vector = await worker.passageVector(fields.text)
+    const rule = leadParagraph(fields.text)
+    const vector = await worker.passageVector(rule)
     if (vector)
       index.setVector({
         id,
@@ -286,7 +295,7 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
       })
     worker.kick()
     const similar = index.similar({
-      text: fields.text,
+      text: rule,
       excludeId: id,
       limit: SIMILAR_LIMIT,
       vector,
