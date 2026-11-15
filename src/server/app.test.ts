@@ -285,6 +285,89 @@ describe('MCP over Streamable HTTP', () => {
   })
 })
 
+describe('loading rules for the work', () => {
+  const rule = (id: string, text: string, labels: Partial<Memory>) =>
+    memory({ id, topic: 'code', text, ...labels })
+  const LABELLED: FakeStoreSeed = {
+    topics: { code: { trigger: 'read before writing code' } },
+    memories: [
+      rule('m_aaaaaaaa', 'Prefer guard clauses.', { tags: ['code'] }),
+      rule('m_bbbbbbbb', 'Prefer satisfies over as.', { filetypes: ['ts', 'js'] }),
+      rule('m_cccccccc', 'One owner per subscription.', { filetypes: ['ts'], tags: ['rxjs'] }),
+      rule('m_dddddddd', 'Use uv, never pip.', { filetypes: ['py'] }),
+      ...Array.from({ length: 30 }, (_, i) =>
+        rule(
+          `m_x${String.fromCharCode(97 + Math.floor(i / 26))}${String.fromCharCode(97 + (i % 26))}aaaaa`,
+          `Bulk rule ${i}. ${'x'.repeat(1200)}`,
+          {
+            tags: ['bulk'],
+          },
+        ),
+      ),
+    ],
+  }
+  const state: { harness?: Harness; client?: Client } = {}
+  const call = async (name: string, args: Record<string, unknown>) => {
+    if (!state.client) throw new Error('not connected')
+    return textOf(await state.client.callTool({ name, arguments: args }))
+  }
+  beforeAll(async () => {
+    state.harness = await start(LABELLED)
+    state.client = await connect(state.harness.base)
+  })
+  afterAll(async () => {
+    await state.client?.close()
+    await state.harness?.close()
+  })
+
+  it('lists the labels in use in the instructions and the brief', async () => {
+    const instructions = state.client?.getInstructions() ?? ''
+    expect(instructions).toMatch(/^Tags: bulk \(30\), code \(1\), rxjs \(1\)$/m)
+    expect(instructions).toMatch(/^File types: ts \(2\), js \(1\), py \(1\)$/m)
+    expect(await call('brief', {})).toMatch(/^File types: ts \(2\)/m)
+  })
+
+  it('brief loads every rule for the described work, in full, and logs them', async () => {
+    const text = await call('brief', { filetypes: ['.TS'], tags: ['code', 'rxjs', 'not valid!'] })
+    expect(text).toContain('## Loaded for this work (filetypes: ts; tags: code, rxjs)')
+    expect(text).toContain('Prefer guard clauses.')
+    expect(text).toContain('Prefer satisfies over as.')
+    expect(text).toContain('One owner per subscription.')
+    expect(text).not.toContain('Use uv')
+    const loadedIds = state.harness?.store.recallLog.map((entry) => entry.id)
+    expect(loadedIds).toEqual(expect.arrayContaining(['m_aaaaaaaa', 'm_bbbbbbbb', 'm_cccccccc']))
+  })
+
+  it('brief says when nothing matches, and leaves the section out when no work is given', async () => {
+    expect(await call('brief', { filetypes: ['rs'] })).toContain('No memories match this work.')
+    expect(await call('brief', {})).not.toContain('## Loaded for this work')
+  })
+
+  it('pages whole memories and says how to get the rest', async () => {
+    const first = await call('recall', { tags: ['bulk'] })
+    const shown = (text: string) =>
+      text.split('\n').filter((line) => line.startsWith('- m_')).length
+    const count = shown(first)
+    expect(count).toBeGreaterThan(0)
+    expect(count).toBeLessThan(30)
+    expect(first).toContain(
+      `Showing 1–${count} of 30. Next page: call recall with the same arguments and offset=${count}.`,
+    )
+    const second = await call('recall', { tags: ['bulk'], offset: count })
+    expect(second).toContain(`Showing ${count + 1}–`)
+    expect(second).not.toContain('Bulk rule 0.')
+    const past = await call('recall', { tags: ['bulk'], offset: 99 })
+    expect(past).toBe('No more matches: offset 30 is past the last of 30.')
+  })
+
+  it('brief pages its loaded section the same way', async () => {
+    const text = await call('brief', { tags: ['bulk'] })
+    expect(text).toMatch(
+      /Loaded \d+ of 30\. Load the rest: call recall with tags=\["bulk"\] and offset=\d+\./,
+    )
+  })
+})
+
 describe('instructions cap', () => {
   const state: { harness?: Harness } = {}
   afterEach(() => state.harness?.close())

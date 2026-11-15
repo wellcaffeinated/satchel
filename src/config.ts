@@ -16,7 +16,12 @@ export const TOPIC_NAME_MAX_CHARS = 32
 export const TOPIC_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 export const TRIGGER_MAX_CHARS = 160
 export const RECALL_DEFAULT_LIMIT = 8
-export const RECALL_MAX_LIMIT = 25
+export const RECALL_MAX_LIMIT = 100
+// Pages hold whole memories up to these sizes; see docs/design.md "Paging".
+export const RECALL_PAGE_MAX_CHARS = 24_000
+export const BRIEF_LOADED_MAX_CHARS = 32_000
+// A client may describe its work with many labels (every dependency, say).
+export const REQUEST_LABELS_MAX_COUNT = 100
 export const CLIENT_NAME_MAX_CHARS = 64
 export const PROJECT_MAX_CHARS = 200
 export const BRANCH_MAX_CHARS = 200

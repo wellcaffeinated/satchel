@@ -57,11 +57,15 @@ export interface SearchFilter {
   host?: string
   /** Only host-scoped memories (of `host`, when given). */
   hostScopedOnly?: boolean
+  /** Labels of the work: a memory matches when every label field it sets overlaps. */
+  filetypes?: string[]
+  tags?: string[]
 }
 
 export interface SearchInput extends SearchFilter {
   query?: string
-  limit: number
+  /** Search results kept (listing returns every match). */
+  limit?: number
   /** Embedding of `query`, with the model that produced it. */
   queryVector?: { model: string; vector: Float32Array }
 }
@@ -91,6 +95,8 @@ export interface SearchIndex {
   findCheckpoint(project: string, branch: string): Checkpoint | undefined
   listCheckpoints(project: string, branch?: string): Checkpoint[]
   topicCounts(): Map<string, number>
+  /** kind ('filetype' | 'tag') -> value -> count, most used first. */
+  labelCounts(): { kind: string; value: string; count: number }[]
   projectMemoryCount(project: string): number
   /** host -> number of host-scoped memories. */
   hostCounts(): Map<string, number>
@@ -171,6 +177,31 @@ function blobToVector(value: SQLOutputValue | undefined): Float32Array {
   return new Float32Array(copy.buffer, 0, Math.floor(copy.byteLength / BYTES_PER_FLOAT))
 }
 
+const LABEL_KINDS = { filetypes: 'filetype', tags: 'tag' } as const
+
+/**
+ * One label field of the matching rule: a memory that sets this field must share a value
+ * with the request; when the request has no values for it, the memory must not set it.
+ */
+function labelFieldClause(kind: string, values: string[]): { sql: string; params: string[] } {
+  const hasField = `EXISTS (SELECT 1 FROM labels l WHERE l.id = m.id AND l.kind = '${kind}')`
+  if (values.length === 0) return { sql: `NOT ${hasField}`, params: [] }
+  const placeholders = values.map(() => '?').join(', ')
+  return {
+    sql: `(NOT ${hasField} OR EXISTS (SELECT 1 FROM labels l WHERE l.id = m.id AND l.kind = '${kind}' AND l.value IN (${placeholders})))`,
+    params: values,
+  }
+}
+
+function labelClause(filter: SearchFilter): { sql: string; params: string[] }[] {
+  if (filter.filetypes === undefined && filter.tags === undefined) return []
+  return [
+    { sql: 'EXISTS (SELECT 1 FROM labels l WHERE l.id = m.id)', params: [] },
+    labelFieldClause(LABEL_KINDS.filetypes, filter.filetypes ?? []),
+    labelFieldClause(LABEL_KINDS.tags, filter.tags ?? []),
+  ]
+}
+
 function filterClause(filter: SearchFilter): { sql: string; params: SQLInputValue[] } {
   const { topic, project, host, hostScopedOnly } = filter
   const parts = [
@@ -179,9 +210,18 @@ function filterClause(filter: SearchFilter): { sql: string; params: SQLInputValu
     { sql: "(m.scope != 'host' OR m.host = ?)", value: host },
   ].filter((part) => part.value !== undefined)
   const hostOnly = hostScopedOnly ? ["m.scope = 'host'"] : []
+  const labels = labelClause(filter)
   return {
-    sql: ['1 = 1', ...parts.map((part) => part.sql), ...hostOnly].join(' AND '),
-    params: parts.map((part) => part.value ?? null),
+    sql: [
+      '1 = 1',
+      ...parts.map((part) => part.sql),
+      ...hostOnly,
+      ...labels.map((label) => label.sql),
+    ].join(' AND '),
+    params: [
+      ...parts.map((part) => part.value ?? null),
+      ...labels.flatMap((label) => label.params),
+    ],
   }
 }
 
@@ -430,12 +470,17 @@ export function createSearchIndex({ path }: { path: string }): SearchIndex {
     return memories.toSorted((a, b) => rank(a) - rank(b))
   }
 
-  function listMatching(input: SearchFilter & { limit: number }): Memory[] {
+  /** Every match: rules for any file type first, then local, then topic and creation order. */
+  function listMatching(input: SearchFilter): Memory[] {
     const clause = filterClause(input)
     return all(
       `SELECT m.* FROM memories m WHERE ${clause.sql}
-       ORDER BY CASE WHEN m.project = ? OR m.host = ? THEN 0 ELSE 1 END, m.updated DESC LIMIT ?`,
-      [...clause.params, input.project ?? null, input.host ?? null, input.limit],
+       ORDER BY
+         CASE WHEN EXISTS (SELECT 1 FROM labels l WHERE l.id = m.id AND l.kind = 'filetype')
+           THEN 1 ELSE 0 END,
+         CASE WHEN m.project = ? OR m.host = ? THEN 0 ELSE 1 END,
+         m.topic, m.created, m.id`,
+      [...clause.params, input.project ?? null, input.host ?? null],
     ).map(toMemory)
   }
 
@@ -445,10 +490,12 @@ export function createSearchIndex({ path }: { path: string }): SearchIndex {
     project,
     host,
     hostScopedOnly,
-    limit,
+    filetypes,
+    tags,
+    limit = CANDIDATES_PER_LIST,
     queryVector,
   }: SearchInput & { query: string }) {
-    const filter = { topic, project, host, hostScopedOnly }
+    const filter = { topic, project, host, hostScopedOnly, filetypes, tags }
     const match = toMatchQuery(query)
     const textHits = match ? ftsCandidates({ match, filter, limit: CANDIDATES_PER_LIST }) : []
     const vectorHits = queryVector
@@ -467,7 +514,7 @@ export function createSearchIndex({ path }: { path: string }): SearchIndex {
     const vectorOnly = vectorHits.map((hit) => hit.id).filter((id) => !known.has(id))
     const byId = new Map([...known, ...memoriesByIds(vectorOnly)])
     const ranked = [...scores.entries()]
-      .sort((a, b) => b[1] - a[1])
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
       .flatMap(([id]) => byId.get(id) ?? [])
     return byLocalFirst(filter, ranked).slice(0, limit)
   }
@@ -559,6 +606,12 @@ export function createSearchIndex({ path }: { path: string }): SearchIndex {
           ? all('SELECT * FROM checkpoints WHERE project = ? ORDER BY updated DESC', [project])
           : all('SELECT * FROM checkpoints WHERE project = ? AND branch = ?', [project, branch])
       return rows.map(toCheckpoint)
+    },
+    labelCounts() {
+      return all(
+        `SELECT kind, value, count(*) AS n FROM labels
+         GROUP BY kind, value ORDER BY kind, n DESC, value`,
+      ).map((row) => ({ kind: text(row, 'kind'), value: text(row, 'value'), count: Number(row.n) }))
     },
     topicCounts() {
       const rows = all('SELECT topic, count(*) AS n FROM memories GROUP BY topic')

@@ -3,6 +3,7 @@ import {
   type Checkpoint,
   type CheckpointInput,
   type Host,
+  type Labels,
   type MemorizeInput,
   type Memory,
   type RecallInput,
@@ -37,6 +38,14 @@ function idGenerator(prefix: string) {
 
 function checkpointKey(project: string, branch: string): string {
   return `${project}\u0000${branch}`
+}
+
+/** The matching rule from docs/design.md: every label field the memory sets must overlap. */
+function matchesWork(memory: Memory, work: { filetypes?: string[]; tags?: string[] }): boolean {
+  const field = (own: string[] | undefined, asked: string[] | undefined) =>
+    !own?.length || own.some((value) => asked?.includes(value))
+  const labelled = Boolean(memory.filetypes?.length || memory.tags?.length)
+  return labelled && field(memory.filetypes, work.filetypes) && field(memory.tags, work.tags)
 }
 
 function matchesQuery(memory: Memory, query: string | undefined): boolean {
@@ -76,15 +85,30 @@ export function createFakeStore(seed: FakeStoreSeed = {}): FakeStore {
     const visible = (m: Memory) =>
       (m.scope !== 'project' || input.project === undefined || m.project === input.project) &&
       (m.scope !== 'host' || input.host === undefined || m.host === input.host)
-    const hostOnly = input.host !== undefined && !input.query && !input.topic
-    const found = [...memories.values()]
+    const labelled = input.filetypes !== undefined || input.tags !== undefined
+    const hostOnly = input.host !== undefined && !input.query && !input.topic && !labelled
+    return [...memories.values()]
       .filter((m) => input.topic === undefined || m.topic === input.topic)
       .filter((m) => matchesQuery(m, input.query))
       .filter(visible)
       .filter((m) => !hostOnly || m.scope === 'host')
-      .slice(0, input.limit ?? 8)
-    recallLog.push(...found.map((m) => ({ id: m.id, client: input.client })))
-    return found
+      .filter((m) => !labelled || matchesWork(m, input))
+  }
+
+  async function logRecall(input: { ids: string[]; client: string }) {
+    recallLog.push(...input.ids.map((id) => ({ id, client: input.client })))
+  }
+
+  async function labels(): Promise<Labels> {
+    const counted = (values: string[]) =>
+      [...Map.groupBy(values, (value) => value)]
+        .map(([value, list]) => ({ value, count: list.length }))
+        .toSorted((a, b) => b.count - a.count || a.value.localeCompare(b.value))
+    const all = [...memories.values()]
+    return {
+      filetypes: counted(all.flatMap((m) => m.filetypes ?? [])),
+      tags: counted(all.flatMap((m) => m.tags ?? [])),
+    }
   }
 
   async function memorize(input: MemorizeInput) {
@@ -172,6 +196,8 @@ export function createFakeStore(seed: FakeStoreSeed = {}): FakeStore {
     core: async () => coreText,
     topics,
     recall,
+    logRecall,
+    labels,
     memorize,
     forget,
     checkpoint,

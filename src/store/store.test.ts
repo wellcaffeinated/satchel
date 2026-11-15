@@ -81,7 +81,7 @@ describe('store', () => {
         topicTrigger: 'read before writing Svelte',
       })
       expect(memory.id).toMatch(/^m_[a-z2-7]{8}$/)
-      const found = await store.recall({ query: 'svelte bindings', client: 'test-client' })
+      const found = await store.recall({ query: 'svelte bindings' })
       expect(found.map((m) => m.id)).toEqual([memory.id])
       expect(found[0]?.text).toBe('Function bindings in Svelte write to the getter.')
 
@@ -152,7 +152,7 @@ describe('store', () => {
       await first.close()
       rmSync(join(dataDir(), 'index.sqlite'), { force: true })
       const second = await open()
-      const found = await second.recall({ query: 'options object', client: 'c' })
+      const found = await second.recall({ query: 'options object' })
       expect(found[0]).toMatchObject({ id: memory.id, filetypes: ['ts', 'js'], tags: ['code'] })
     })
 
@@ -177,7 +177,7 @@ describe('store', () => {
       expect(second.memory.id).toBe(first.memory.id)
       expect(second.memory.created).toBe(first.memory.created)
       expect(second.memory.updated).not.toBe(first.memory.updated)
-      const found = await store.recall({ topic: 'general', client: 'c' })
+      const found = await store.recall({ topic: 'general' })
       expect(found.map((m) => m.text)).toEqual(['New wording of the fact.'])
       expect(readdirSync(join(repoDir(), 'memories', 'general'))).toHaveLength(1)
       await expect(memorize(store, 'x', { replaces: 'm_zzzzzzzz' })).rejects.toMatchObject({
@@ -196,16 +196,14 @@ describe('store', () => {
       expect(
         existsSync(join(repoDir(), 'memories', 'one', `a-movable-fact-${first.memory.id}.md`)),
       ).toBe(false)
-      expect((await store.recall({ topic: 'two', client: 'c' })).map((m) => m.id)).toEqual([
-        first.memory.id,
-      ])
+      expect((await store.recall({ topic: 'two' })).map((m) => m.id)).toEqual([first.memory.id])
       expect(git(repoDir(), 'status', '--porcelain').trim()).toBe('')
     })
 
     it('requires a query or a topic', async () => {
       const store = await open()
-      await expect(store.recall({ client: 'c' })).rejects.toMatchObject({ code: 'invalid' })
-      await expect(store.recall({ query: '  ', client: 'c' })).rejects.toMatchObject({
+      await expect(store.recall({})).rejects.toMatchObject({ code: 'invalid' })
+      await expect(store.recall({ query: '  ' })).rejects.toMatchObject({
         code: 'invalid',
       })
     })
@@ -221,13 +219,13 @@ describe('store', () => {
     ])('survives odd query %j', async (query) => {
       const store = await open()
       await memorize(store, 'foo bar and a quoted "thing".')
-      await expect(store.recall({ query, topic: 'general', client: 'c' })).resolves.toBeDefined()
+      await expect(store.recall({ query, topic: 'general' })).resolves.toBeDefined()
     })
 
     it('finds stems and hyphenated words', async () => {
       const store = await open()
       await memorize(store, 'The self-hosted servers keep restarting overnight.')
-      const found = await store.recall({ query: 'server restart self-hosted', client: 'c' })
+      const found = await store.recall({ query: 'server restart self-hosted' })
       expect(found).toHaveLength(1)
     })
 
@@ -239,7 +237,7 @@ describe('store', () => {
       })
       await memorize(store, 'Deploy notes for beta service.', { scope: 'project', project: 'beta' })
       await memorize(store, 'Deploy notes everywhere.')
-      const found = await store.recall({ query: 'deploy notes', project: 'alpha', client: 'c' })
+      const found = await store.recall({ query: 'deploy notes', project: 'alpha' })
       expect(found.map((m) => m.text)).toEqual([
         'Deploy notes for alpha service.',
         'Deploy notes everywhere.',
@@ -255,11 +253,11 @@ describe('store', () => {
         host: 'desktop',
       })
       await memorize(store, 'The user likes cheese.', { host: 'desktop' })
-      const onNas = await store.recall({ query: 'pool called', host: 'nas', client: 'c' })
+      const onNas = await store.recall({ query: 'pool called', host: 'nas' })
       expect(onNas.map((m) => m.text)).toEqual(['The nas pool is called tank.'])
-      const aboutDesktop = await store.recall({ host: 'desktop', client: 'c' })
+      const aboutDesktop = await store.recall({ host: 'desktop' })
       expect(aboutDesktop.map((m) => m.text)).toEqual(['The desktop pool is called scratch.'])
-      const cheese = await store.recall({ query: 'cheese', host: 'nas', client: 'c' })
+      const cheese = await store.recall({ query: 'cheese', host: 'nas' })
       expect(cheese.map((m) => [m.scope, m.host])).toEqual([['global', undefined]])
       expect(await store.hosts()).toEqual([
         { name: 'desktop', count: 1 },
@@ -267,21 +265,24 @@ describe('store', () => {
       ])
     })
 
-    it('clamps the limit and logs returned ids', async () => {
-      const store = await open()
-      const ids = await Promise.all(
-        Array.from({ length: 3 }, (_, i) => memorize(store, `Logged fact number ${i}.`)),
-      ).then((results) => results.map((r) => r.memory.id))
-      const found = await store.recall({ topic: 'general', limit: 2, client: 'logger' })
-      expect(found).toHaveLength(2)
+    it('lists a whole topic oldest first and logs what the caller says it showed', async () => {
+      const clock = createTickingClock()
+      const store = await open({ now: clock })
+      const first = await memorize(store, 'Logged fact number 0.')
+      const second = await memorize(store, 'Logged fact number 1.')
+      const third = await memorize(store, 'Logged fact number 2.')
+      const ids = [first, second, third].map((result) => result.memory.id)
+      const found = await store.recall({ topic: 'general' })
+      expect(found.map((m) => m.id)).toEqual(ids)
+      await store.logRecall({ ids: ids.slice(0, 2), client: 'logger' })
       await store.close()
       const db = new DatabaseSync(join(dataDir(), 'index.sqlite'), { readOnly: true })
       const rows = db.prepare('SELECT memory_id, client FROM recall_log').all()
       db.close()
-      expect(rows).toHaveLength(2)
-      expect(
-        rows.every((row) => row.client === 'logger' && ids.includes(String(row.memory_id))),
-      ).toBe(true)
+      expect(rows.map((row) => [row.memory_id, row.client])).toEqual([
+        [ids[0], 'logger'],
+        [ids[1], 'logger'],
+      ])
     })
 
     it('reports similar memories with FTS when embeddings are off', async () => {
@@ -299,7 +300,7 @@ describe('store', () => {
       const cp = await store.checkpoint({ project: 'p', branch: 'b', commit: 'abc', source: 'c' })
       await store.forget(memory.id, 'c')
       await store.forget(cp.id, 'c')
-      expect(await store.recall({ topic: 'general', client: 'c' })).toEqual([])
+      expect(await store.recall({ topic: 'general' })).toEqual([])
       expect(await store.checkpoints('p')).toEqual([])
       await expect(store.forget(memory.id, 'c')).rejects.toMatchObject({ code: 'not_found' })
       expect(git(repoDir(), 'status', '--porcelain').trim()).toBe('')
@@ -427,9 +428,7 @@ describe('store', () => {
       for (const suffix of ['', '-wal', '-shm'])
         rmSync(join(dataDir(), `index.sqlite${suffix}`), { force: true })
       const second = await open()
-      expect((await second.recall({ query: 'kettles', client: 'c' })).map((m) => m.id)).toEqual([
-        memory.id,
-      ])
+      expect((await second.recall({ query: 'kettles' })).map((m) => m.id)).toEqual([memory.id])
       expect(await second.checkpoints('p', 'b')).toHaveLength(1)
       expect(await second.topics()).toEqual([
         { name: 'general', trigger: 'read before anything', count: 1 },
@@ -444,7 +443,7 @@ describe('store', () => {
         rmSync(join(dataDir(), `index.sqlite${suffix}`), { force: true })
       writeFileSync(join(dataDir(), 'index.sqlite'), 'this is not a database'.repeat(100))
       const second = await open()
-      expect(await second.recall({ query: 'corruption', client: 'c' })).toHaveLength(1)
+      expect(await second.recall({ query: 'corruption' })).toHaveLength(1)
     })
 
     it('picks up direct edits, additions and deletions by the owner', async () => {
@@ -457,16 +456,16 @@ describe('store', () => {
         '---\nid: m_abcdefgh\ntopic: general\nscope: global\ncreated: 2026-01-01T00:00:00Z\nupdated: 2026-01-01T00:00:00Z\nsource: owner\n---\nThe owner typed a zeppelin fact.\n',
       )
       await vi.waitFor(async () => {
-        expect(await store.recall({ query: 'zeppelin', client: 'c' })).toHaveLength(1)
+        expect(await store.recall({ query: 'zeppelin' })).toHaveLength(1)
       })
       writeFileSync(handmade, readFileSync(handmade, 'utf8').replace('zeppelin', 'blimp'))
       await vi.waitFor(async () => {
-        expect(await store.recall({ query: 'blimp', client: 'c' })).toHaveLength(1)
-        expect(await store.recall({ query: 'zeppelin', client: 'c' })).toHaveLength(0)
+        expect(await store.recall({ query: 'blimp' })).toHaveLength(1)
+        expect(await store.recall({ query: 'zeppelin' })).toHaveLength(0)
       })
       rmSync(handmade)
       await vi.waitFor(async () => {
-        expect(await store.recall({ query: 'blimp', client: 'c' })).toHaveLength(0)
+        expect(await store.recall({ query: 'blimp' })).toHaveLength(0)
       })
     })
 
@@ -483,7 +482,7 @@ describe('store', () => {
       )
       writeFileSync(join(repoDir(), 'topics.yaml'), 'this: [is, not: valid')
       const second = await open()
-      expect(await second.recall({ query: 'telescopes', client: 'c' })).toHaveLength(1)
+      expect(await second.recall({ query: 'telescopes' })).toHaveLength(1)
       expect(await second.topics()).toEqual([{ name: 'general', trigger: '', count: 1 }])
     })
 
@@ -494,9 +493,7 @@ describe('store', () => {
       const [file] = readdirSync(dir)
       writeFileSync(join(dir, 'copy.md'), readFileSync(join(dir, file ?? ''), 'utf8'))
       await store.sync()
-      expect((await store.recall({ query: 'lanterns', client: 'c' })).map((m) => m.id)).toEqual([
-        memory.id,
-      ])
+      expect((await store.recall({ query: 'lanterns' })).map((m) => m.id)).toEqual([memory.id])
     })
   })
 
@@ -524,12 +521,12 @@ describe('store', () => {
         topic: 'food',
         topicTrigger: 't',
       })
-      expect(await store.recall({ query: paraphrase, client: 'c' })).toEqual([])
-      expect(await store.recall({ query: 'ice', client: 'c' })).toHaveLength(1)
+      expect(await store.recall({ query: paraphrase })).toEqual([])
+      expect(await store.recall({ query: 'ice' })).toHaveLength(1)
 
       release()
       await store.embeddingsIdle()
-      const found = await store.recall({ query: paraphrase, client: 'c' })
+      const found = await store.recall({ query: paraphrase })
       expect(found.map((m) => m.topic)).toEqual(['cars'])
     })
 
@@ -548,7 +545,7 @@ describe('store', () => {
         topic: 'food',
         topicTrigger: 't',
       })
-      const found = await store.recall({ query: 'vehicle automobile drive', client: 'c' })
+      const found = await store.recall({ query: 'vehicle automobile drive' })
       expect(found[0]?.topic).toBe('cars')
       expect(found.map((m) => m.topic)).not.toContain('food')
     })
@@ -570,7 +567,7 @@ describe('store', () => {
       })
       await memorize(store, 'Kettles are great.')
       await store.embeddingsIdle()
-      expect(await store.recall({ query: 'kettles', client: 'c' })).toHaveLength(1)
+      expect(await store.recall({ query: 'kettles' })).toHaveLength(1)
     })
 
     it('falls back to full text when embedding a query throws', async () => {
@@ -582,7 +579,7 @@ describe('store', () => {
       const store = await open({ embedModel: 'fake-a', embedderLoader: fakeLoader(broken) })
       await store.embeddingsIdle()
       await memorize(store, 'Kettles are great.')
-      expect(await store.recall({ query: 'kettles', client: 'c' })).toHaveLength(1)
+      expect(await store.recall({ query: 'kettles' })).toHaveLength(1)
     })
 
     function storedModels(): { id: string; model: string }[] {
@@ -629,7 +626,7 @@ describe('store', () => {
       )
       await vi.waitFor(async () => {
         await store.embeddingsIdle()
-        const found = await store.recall({ query: 'vehicle', client: 'c' })
+        const found = await store.recall({ query: 'vehicle' })
         expect(found.map((m) => m.id)).toEqual(['m_abcdefgh'])
       })
     })

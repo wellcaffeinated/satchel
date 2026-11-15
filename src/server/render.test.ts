@@ -60,6 +60,7 @@ describe('renderBrief', () => {
     topics: [{ name: 'svelte', trigger: 'read before Svelte work', count: 3 }],
     projectMemoryCount: 2,
     hosts: [],
+    labels: { filetypes: [], tags: [] },
   }
 
   it('has core and the full topic map without a project', () => {

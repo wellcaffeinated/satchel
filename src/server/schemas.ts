@@ -12,6 +12,7 @@ import {
   PROJECT_MAX_CHARS,
   RECALL_DEFAULT_LIMIT,
   RECALL_MAX_LIMIT,
+  REQUEST_LABELS_MAX_COUNT,
   TAG_PATTERN,
   TOPIC_NAME_MAX_CHARS,
   TOPIC_NAME_PATTERN,
@@ -48,6 +49,25 @@ const tagsLabel = z
       .regex(TAG_PATTERN, 'tags are lowercase kebab-case, e.g. "code" or "rxjs"'),
   )
   .max(LABELS_MAX_COUNT)
+// What the caller is working on. Lenient: values are normalised and odd ones dropped.
+const workFiletypes = z
+  .array(
+    z
+      .string()
+      .min(1)
+      .max(LABEL_MAX_CHARS * 2),
+  )
+  .max(REQUEST_LABELS_MAX_COUNT)
+  .describe('File types you are working on: extensions, e.g. ["ts", "svelte"]')
+const workTags = z
+  .array(
+    z
+      .string()
+      .min(1)
+      .max(LABEL_MAX_CHARS * 2),
+  )
+  .max(REQUEST_LABELS_MAX_COUNT)
+  .describe('What the work involves: ["code"] when writing code, plus libraries such as "rxjs"')
 const thisHost = z
   .string()
   .min(1)
@@ -62,6 +82,8 @@ export const briefShape = {
   project: project.optional(),
   branch: branch.optional(),
   host: thisHost.optional(),
+  filetypes: workFiletypes.optional(),
+  tags: workTags.optional(),
 }
 
 export const recallShape = {
@@ -84,7 +106,15 @@ export const recallShape = {
     .min(1)
     .max(RECALL_MAX_LIMIT)
     .optional()
-    .describe(`Max results, default ${RECALL_DEFAULT_LIMIT}`),
+    .describe(`Max memories per page; searches default to ${RECALL_DEFAULT_LIMIT}`),
+  filetypes: workFiletypes.optional(),
+  tags: workTags.optional(),
+  offset: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe('Where the page starts; use the value a previous page ended with'),
 }
 
 export const memorizeShape = {

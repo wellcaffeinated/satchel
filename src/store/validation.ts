@@ -5,8 +5,6 @@ import {
   LABEL_MAX_CHARS,
   LABELS_MAX_COUNT,
   MEMORY_MAX_CHARS,
-  RECALL_DEFAULT_LIMIT,
-  RECALL_MAX_LIMIT,
   TAG_PATTERN,
   TOPIC_NAME_MAX_CHARS,
   TOPIC_NAME_PATTERN,
@@ -165,9 +163,4 @@ export function validateCheckpoint(input: CheckpointInput): ValidCheckpointField
               : requireText(input.summary, 'summary', CHECKPOINT_SUMMARY_MAX_CHARS),
         }),
   }
-}
-
-export function clampRecallLimit(limit: number | undefined): number {
-  if (limit === undefined || !Number.isFinite(limit)) return RECALL_DEFAULT_LIMIT
-  return Math.min(RECALL_MAX_LIMIT, Math.max(1, Math.trunc(limit)))
 }

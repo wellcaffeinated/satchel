@@ -11,9 +11,9 @@ type ToolName = 'brief' | 'recall' | 'memorize' | 'forget' | 'checkpoint'
 
 export const TOOL_DESCRIPTIONS = {
   brief:
-    'Load your long-term memory. Call this once at the start of every conversation, before other work, even if you already saw Satchel instructions. Returns standing facts and preferences (core), the topic map (each topic with a "read before ..." trigger), the machines that have machine-specific memories, and with `project`: where work stopped and how many project memories exist. In a git repo pass `project` (origin as host/owner/repo, else the directory name) and the current `branch`; pass `host` (this machine\'s short hostname) if you know it.',
+    'Load your long-term memory. Call this once at the start of every conversation, before other work, even if you already saw Satchel instructions. Returns standing facts and preferences (core), the topic map with the tags and file types in use, the machines that have machine-specific memories, and with `project`: where work stopped. In a git repo pass `project` (origin as host/owner/repo, else the directory name), the current `branch`, and `host` (this machine\'s short hostname). If you will write code, also pass `tags: ["code"]`, the `filetypes` involved and tags for libraries in use: the rules for that work are then loaded in full.',
   recall:
-    "Fetch stored memories. Call before work that matches a topic trigger from the brief, when the user refers to an earlier session, or before guessing at a convention, preference or setup detail. Give `topic` to list a topic, `query` (words or a question) to search, or both. In a repo pass `project` so its memories rank first; pass `host` (this machine's name) so its machine-specific memories rank first and other machines' are left out. `host` alone lists what is known about that machine. Each result has id, topic, scope and date.",
+    'Fetch stored memories. Call before work that matches a topic trigger, when the user refers to an earlier session, before guessing at a convention or preference, and before writing code that the brief did not load rules for. Give `query` to search, `topic` to list a topic, or `filetypes` and `tags` to load the rules for some work (e.g. filetypes ["py"], tags ["code"]); they combine. Pass `project` and `host` so local memories rank first. Results are whole memories in pages: when a page ends with "Next page", call again with that `offset` until you have them all.',
   memorize:
     'Save one durable rule or fact. Call when the user asks you to remember something, corrects you, states a preference, or you learn something non-obvious that would have saved time. First paragraph: the rule, 1-5 self-contained sentences; examples (e.g. a BAD/GOOD code block) may follow. Not for what the repo already records, secrets, or task progress (use `checkpoint`). scope: global by default, including any preference, even one stated on a particular machine; project only for facts about that repository; host only for facts about that machine itself. Set `filetypes` (["ts"]) or `tags` (["code"] for any code, a library like ["rxjs"]) only when the rule is limited to that work: it then loads automatically for it. Use an existing topic; a new one needs `topic_trigger` ("read before ..."). If similar memories come back, merge with `replaces`.',
   forget:
@@ -60,7 +60,7 @@ export function registerSatchelTools(
       inputSchema: briefShape,
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
     },
-    (args) => run('brief', () => service.brief(args)),
+    (args) => run('brief', () => service.brief(args, client)),
   )
   server.registerTool(
     'recall',

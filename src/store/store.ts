@@ -9,6 +9,7 @@ import {
   type Checkpoint,
   type CheckpointInput,
   type Host,
+  type Labels,
   type MemorizeInput,
   type MemorizeResult,
   type Memory,
@@ -30,12 +31,7 @@ import { type ScannedFile, scanRepo } from './repo-scan.ts'
 import { createRepoWatcher } from './repo-watcher.ts'
 import { safePathSegment, slugifyBody } from './slug.ts'
 import { createTopicsFile } from './topics-file.ts'
-import {
-  clampRecallLimit,
-  cleanClientName,
-  validateCheckpoint,
-  validateMemorize,
-} from './validation.ts'
+import { cleanClientName, validateCheckpoint, validateMemorize } from './validation.ts'
 import { createWriteQueue } from './write-queue.ts'
 
 const WATCH_DEBOUNCE_MS = 200
@@ -194,25 +190,37 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
     const query = undefinedIfEmpty(input.query)
     const topic = undefinedIfEmpty(input.topic)
     const host = undefinedIfEmpty(input.host)
-    if (query === undefined && topic === undefined && host === undefined) {
-      throw new SatchelError('invalid', 'recall needs a query, a topic or a host.')
+    const { filetypes, tags } = input
+    const labelled = filetypes !== undefined || tags !== undefined
+    if (query === undefined && topic === undefined && host === undefined && !labelled) {
+      throw new SatchelError('invalid', 'recall needs a query, a topic, a host, filetypes or tags.')
     }
     const queryVector = query === undefined ? undefined : await worker.queryVector(query)
-    const results = index.search({
+    return index.search({
       query,
       topic,
       project: undefinedIfEmpty(input.project),
       host,
       // A host on its own asks what is known about that machine, not for everything.
-      hostScopedOnly: query === undefined && topic === undefined,
-      limit: clampRecallLimit(input.limit),
+      hostScopedOnly: query === undefined && topic === undefined && !labelled,
+      filetypes,
+      tags,
       queryVector,
     })
-    index.logRecall({
-      ids: results.map((memory) => memory.id),
-      client: cleanClientName(input.client),
-    })
-    return results
+  }
+
+  async function logRecall(input: { ids: string[]; client: string }) {
+    if (input.ids.length === 0) return
+    index.logRecall({ ids: input.ids, client: cleanClientName(input.client) })
+  }
+
+  async function labels(): Promise<Labels> {
+    const counts = index.labelCounts()
+    const ofKind = (kind: string) =>
+      counts
+        .filter((entry) => entry.kind === kind)
+        .map((entry) => ({ value: entry.value, count: entry.count }))
+    return { filetypes: ofKind('filetype'), tags: ofKind('tag') }
   }
 
   // ---- writes ---------------------------------------------------------------------------
@@ -372,6 +380,8 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
     core,
     topics,
     recall,
+    logRecall,
+    labels,
     memorize: (input) => queue.run(() => memorizeLocked(input)),
     forget: (id, source) => queue.run(() => forgetLocked(id, source)),
     checkpoint: (input) => queue.run(() => checkpointLocked(input)),

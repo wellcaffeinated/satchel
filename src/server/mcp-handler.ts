@@ -37,7 +37,8 @@ interface ConnectionContext {
 
 async function instructionsFromStore(store: Store, logger: Log): Promise<string> {
   try {
-    return renderInstructions(await store.topics())
+    const [topics, labels] = await Promise.all([store.topics(), store.labels()])
+    return renderInstructions(topics, { labels })
   } catch (error) {
     logger.error('could not list topics for instructions', { error: String(error) })
     return RULES

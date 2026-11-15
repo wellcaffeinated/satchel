@@ -8,7 +8,8 @@ import {
   TOPIC_NAME_MAX_CHARS,
   TRIGGER_MAX_CHARS,
 } from '../config.ts'
-import type { Checkpoint, Host, Memory, Topic } from '../types.ts'
+import type { Checkpoint, Host, LabelCount, Labels, Memory, Topic } from '../types.ts'
+import type { Page } from './paging.ts'
 import { flattenLine, indentContinuation, isoDate, isoMinute } from './text.ts'
 
 const ENTRY_INDENT = '  '
@@ -20,6 +21,8 @@ const SOURCE_MAX_CHARS = 64
  */
 export const USAGE_RULES = [
   "- Before work that matches a topic's trigger, call `recall` with that topic.",
+  '- Before writing code, unless the brief already loaded them, call `recall` with tags ["code"] and the file types involved (e.g. filetypes ["ts"]), plus tags for libraries in use, and read every page.',
+  '- Repository conventions and project memories override global preferences.',
   '- Call `memorize` when the user asks you to remember something, corrects you, states a preference, or you learn a non-obvious fact that would have saved time. One fact per call. Do not save what the repo or its docs already record.',
   '- Save memories as global unless they are true only of one repository (scope `project`) or one machine (scope `host`). Preferences and general facts stay global even when learned while working on a particular machine.',
   '- Call `checkpoint` when stopping work on a branch. A recalled checkpoint is a claim about the past: compare its commit with the repo before relying on it.',
@@ -37,6 +40,21 @@ export interface BriefData {
   branch?: string
   checkpoints: Checkpoint[]
   projectMemoryCount: number
+  /** Every label in use. */
+  labels: Labels
+  /** Memories loaded for the work the caller described, when it described any. */
+  loaded?: LoadedForWork
+}
+
+/** What a request described its work as, after normalising. */
+export interface WorkLabels {
+  filetypes?: string[]
+  tags?: string[]
+}
+
+export interface LoadedForWork {
+  work: WorkLabels
+  page: Page<Memory>
 }
 
 function scopeLabel(memory: Memory): string {
@@ -103,12 +121,75 @@ function renderCore(core: string): string {
   return `## Core\n${trimmed || '(empty)'}`
 }
 
-function renderTopics(topics: Topic[]): string {
+const LABELS_LINE_MAX_ENTRIES = 40
+
+function renderLabelCount(entry: LabelCount): string {
+  return `${flattenLine(entry.value, LABEL_MAX_CHARS)} (${entry.count})`
+}
+
+/**
+ * `Tags: code (12), rxjs (3)` and `File types: ts (5)`. Clients parse these lines (see
+ * docs/design.md "Lines clients may parse"), so keep their form.
+ */
+export function renderLabelsLines(labels: Labels): string[] {
+  const line = (name: string, entries: LabelCount[]) =>
+    entries.length === 0
+      ? []
+      : [`${name}: ${entries.slice(0, LABELS_LINE_MAX_ENTRIES).map(renderLabelCount).join(', ')}`]
+  return [...line('Tags', labels.tags), ...line('File types', labels.filetypes)]
+}
+
+function renderTopics(topics: Topic[], labels: Labels): string {
   if (topics.length === 0) {
     return '## Topics\nNone yet. Start one with `memorize` and `topic_trigger`.'
   }
-  const lines = topics.map(renderTopicLine).join('\n')
+  const lines = [...topics.map(renderTopicLine), ...renderLabelsLines(labels)].join('\n')
   return `## Topics (name (memories): when to recall)\n${lines}`
+}
+
+function jsonList(values: string[] | undefined): string {
+  return JSON.stringify(values ?? [])
+}
+
+/** `filetypes: ts, svelte; tags: code` for headings. */
+function describeWork(work: WorkLabels): string {
+  return [
+    ...(work.filetypes?.length ? [`filetypes: ${labelList(work.filetypes)}`] : []),
+    ...(work.tags?.length ? [`tags: ${labelList(work.tags)}`] : []),
+  ].join('; ')
+}
+
+/** The call that continues a partial page, spelled out so a model can copy it. */
+function workArguments(work: WorkLabels): string {
+  return [
+    ...(work.filetypes?.length ? [`filetypes=${jsonList(work.filetypes)}`] : []),
+    ...(work.tags?.length ? [`tags=${jsonList(work.tags)}`] : []),
+  ].join(', ')
+}
+
+function renderLoaded(loaded: LoadedForWork): string {
+  const heading = `## Loaded for this work (${describeWork(loaded.work)})`
+  const { page } = loaded
+  if (page.total === 0) return `${heading}\nNo memories match this work.`
+  const rest =
+    page.end < page.total
+      ? [
+          `Loaded ${page.end} of ${page.total}. Load the rest: call recall with ${workArguments(loaded.work)} and offset=${page.end}.`,
+        ]
+      : []
+  return [heading, renderMemories(page.items), ...rest].join('\n')
+}
+
+/** The line after a recall page, when there is anything more to say. */
+export function recallFooter(page: Page<unknown>): string[] {
+  if (page.total === 0) return []
+  if (page.items.length === 0) {
+    return [`No more matches: offset ${page.start} is past the last of ${page.total}.`]
+  }
+  if (page.start === 0 && page.end === page.total) return []
+  const range = `Showing ${page.start + 1}–${page.end} of ${page.total}.`
+  if (page.end === page.total) return [range]
+  return [`${range} Next page: call recall with the same arguments and offset=${page.end}.`]
 }
 
 function renderCheckpointSection(data: BriefData, project: string): string {
@@ -160,11 +241,13 @@ function renderUsage(): string {
 
 export function renderBrief(data: BriefData): string {
   const project = data.project === undefined ? [] : [renderProject(data, data.project)]
+  const loaded = data.loaded === undefined ? [] : [renderLoaded(data.loaded)]
   return [
     renderCore(data.core),
-    renderTopics(data.topics),
+    renderTopics(data.topics, data.labels),
     ...renderHosts(data),
     ...project,
+    ...loaded,
     renderUsage(),
   ].join('\n\n')
 }

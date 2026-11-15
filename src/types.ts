@@ -66,8 +66,20 @@ export interface RecallInput {
    * Given without query or topic, lists that machine's host-scoped memories.
    */
   host?: string
-  limit?: number // default 8, max 25
-  client: string // for the recall log
+  /** Labels of the work at hand: memories match when every label field they set overlaps. */
+  filetypes?: string[]
+  tags?: string[]
+}
+
+/** How many memories carry one label value. */
+export interface LabelCount {
+  value: string
+  count: number
+}
+
+export interface Labels {
+  filetypes: LabelCount[]
+  tags: LabelCount[]
 }
 
 export interface CheckpointInput {
@@ -93,7 +105,15 @@ export interface Store {
   core(): Promise<string>
   /** All topics with counts, most-used first. */
   topics(): Promise<Topic[]>
+  /**
+   * Every match, in the order docs/design.md "Paging" sets: by relevance for a query
+   * (at most the search candidates), otherwise all matching memories. Paging is the caller's.
+   */
   recall(input: RecallInput): Promise<Memory[]>
+  /** Records that these memories were shown to a client. */
+  logRecall(input: { ids: string[]; client: string }): Promise<void>
+  /** Every label in use, most used first. */
+  labels(): Promise<Labels>
   memorize(input: MemorizeInput): Promise<MemorizeResult>
   /** Deletes a memory or checkpoint by id. Throws SatchelError("not_found"). */
   forget(id: string, source: string): Promise<void>

@@ -154,13 +154,39 @@ describe('search index', () => {
     ).toThrow(/already used/)
   })
 
-  it('lists a topic newest first', () => {
+  it('lists a topic in creation order, so an import keeps its source order', () => {
     const index = create()
-    add(index, memory('m_aaaaaaaa', 'old', { updated: '2026-01-01T00:00:00Z' }))
-    add(index, memory('m_bbbbbbbb', 'new', { updated: '2026-02-01T00:00:00Z' }))
-    expect(index.search({ topic: 'general', limit: 5 }).map((m) => m.id)).toEqual([
-      'm_bbbbbbbb',
+    add(index, memory('m_bbbbbbbb', 'second', { created: '2026-02-01T00:00:00Z' }))
+    add(index, memory('m_aaaaaaaa', 'first', { created: '2026-01-01T00:00:00Z' }))
+    expect(index.search({ topic: 'general' }).map((m) => m.id)).toEqual([
       'm_aaaaaaaa',
+      'm_bbbbbbbb',
+    ])
+  })
+
+  it('loads by label: every field a memory sets must match the work', () => {
+    const index = create()
+    add(index, memory('m_aaaaaaaa', 'any code', { tags: ['code'] }))
+    add(index, memory('m_bbbbbbbb', 'typescript', { filetypes: ['ts', 'js'] }))
+    add(index, memory('m_cccccccc', 'rxjs in ts', { filetypes: ['ts'], tags: ['rxjs'] }))
+    add(index, memory('m_dddddddd', 'python', { filetypes: ['py'] }))
+    add(index, memory('m_eeeeeeee', 'unlabelled'))
+    const ids = (work: { filetypes?: string[]; tags?: string[] }) =>
+      index.search(work).map((m) => m.id)
+    expect(ids({ filetypes: ['ts'], tags: ['code'] })).toEqual(['m_aaaaaaaa', 'm_bbbbbbbb'])
+    expect(ids({ filetypes: ['ts'], tags: ['code', 'rxjs'] })).toEqual([
+      'm_aaaaaaaa',
+      'm_bbbbbbbb',
+      'm_cccccccc',
+    ])
+    expect(ids({ filetypes: ['py'] })).toEqual(['m_dddddddd'])
+    expect(ids({ tags: ['rxjs'] })).toEqual([])
+    expect(index.labelCounts()).toEqual([
+      { kind: 'filetype', value: 'ts', count: 2 },
+      { kind: 'filetype', value: 'js', count: 1 },
+      { kind: 'filetype', value: 'py', count: 1 },
+      { kind: 'tag', value: 'code', count: 1 },
+      { kind: 'tag', value: 'rxjs', count: 1 },
     ])
   })
 })
