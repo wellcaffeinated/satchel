@@ -49,6 +49,10 @@ export interface SearchFilter {
   topic?: string
   /** Hides other projects' project-scoped memories. */
   project?: string
+  /** Hides other machines' host-scoped memories. */
+  host?: string
+  /** Only host-scoped memories (of `host`, when given). */
+  hostScopedOnly?: boolean
 }
 
 export interface SearchInput extends SearchFilter {
@@ -84,6 +88,8 @@ export interface SearchIndex {
   listCheckpoints(project: string, branch?: string): Checkpoint[]
   topicCounts(): Map<string, number>
   projectMemoryCount(project: string): number
+  /** host -> number of host-scoped memories. */
+  hostCounts(): Map<string, number>
   search(input: SearchInput): Memory[]
   similar(input: SimilarInput): Memory[]
   setVector(input: { id: string; model: string; textHash: string; vector: Float32Array }): void
@@ -151,13 +157,16 @@ function blobToVector(value: SQLOutputValue | undefined): Float32Array {
   return new Float32Array(copy.buffer, 0, Math.floor(copy.byteLength / BYTES_PER_FLOAT))
 }
 
-function filterClause({ topic, project }: SearchFilter): { sql: string; params: SQLInputValue[] } {
+function filterClause(filter: SearchFilter): { sql: string; params: SQLInputValue[] } {
+  const { topic, project, host, hostScopedOnly } = filter
   const parts = [
     { sql: 'm.topic = ?', value: topic },
     { sql: "(m.scope != 'project' OR m.project = ?)", value: project },
+    { sql: "(m.scope != 'host' OR m.host = ?)", value: host },
   ].filter((part) => part.value !== undefined)
+  const hostOnly = hostScopedOnly ? ["m.scope = 'host'"] : []
   return {
-    sql: ['1 = 1', ...parts.map((part) => part.sql)].join(' AND '),
+    sql: ['1 = 1', ...parts.map((part) => part.sql), ...hostOnly].join(' AND '),
     params: parts.map((part) => part.value ?? null),
   }
 }
@@ -378,18 +387,22 @@ export function createSearchIndex({ path }: { path: string }): SearchIndex {
       .slice(0, limit)
   }
 
-  function byProjectFirst(project: string | undefined, memories: Memory[]): Memory[] {
-    if (project === undefined) return memories
-    const rank = (memory: Memory) => (memory.project === project ? 0 : 1)
+  /** The caller's own project and machine first; the order is otherwise kept. */
+  function byLocalFirst(filter: SearchFilter, memories: Memory[]): Memory[] {
+    if (filter.project === undefined && filter.host === undefined) return memories
+    const isLocal = (memory: Memory) =>
+      (filter.project !== undefined && memory.project === filter.project) ||
+      (filter.host !== undefined && memory.host === filter.host)
+    const rank = (memory: Memory) => (isLocal(memory) ? 0 : 1)
     return memories.toSorted((a, b) => rank(a) - rank(b))
   }
 
-  function listTopic({ topic, project, limit }: SearchFilter & { limit: number }): Memory[] {
-    const clause = filterClause({ topic, project })
+  function listMatching(input: SearchFilter & { limit: number }): Memory[] {
+    const clause = filterClause(input)
     return all(
       `SELECT m.* FROM memories m WHERE ${clause.sql}
-       ORDER BY CASE WHEN m.project = ? THEN 0 ELSE 1 END, m.updated DESC LIMIT ?`,
-      [...clause.params, project ?? null, limit],
+       ORDER BY CASE WHEN m.project = ? OR m.host = ? THEN 0 ELSE 1 END, m.updated DESC LIMIT ?`,
+      [...clause.params, input.project ?? null, input.host ?? null, input.limit],
     ).map(toMemory)
   }
 
@@ -397,10 +410,12 @@ export function createSearchIndex({ path }: { path: string }): SearchIndex {
     query,
     topic,
     project,
+    host,
+    hostScopedOnly,
     limit,
     queryVector,
   }: SearchInput & { query: string }) {
-    const filter = { topic, project }
+    const filter = { topic, project, host, hostScopedOnly }
     const match = toMatchQuery(query)
     const textHits = match ? ftsCandidates({ match, filter, limit: CANDIDATES_PER_LIST }) : []
     const vectorHits = queryVector
@@ -421,12 +436,12 @@ export function createSearchIndex({ path }: { path: string }): SearchIndex {
     const ranked = [...scores.entries()]
       .sort((a, b) => b[1] - a[1])
       .flatMap(([id]) => byId.get(id) ?? [])
-    return byProjectFirst(project, ranked).slice(0, limit)
+    return byLocalFirst(filter, ranked).slice(0, limit)
   }
 
   function search(input: SearchInput): Memory[] {
     if (input.query?.trim()) return hybridSearch({ ...input, query: input.query })
-    return listTopic(input)
+    return listMatching(input)
   }
 
   function similarByVector({
@@ -522,6 +537,12 @@ export function createSearchIndex({ path }: { path: string }): SearchIndex {
         [project],
       )
       return Number(row?.n ?? 0)
+    },
+    hostCounts() {
+      const rows = all(
+        "SELECT host, count(*) AS n FROM memories WHERE scope = 'host' AND host IS NOT NULL GROUP BY host",
+      )
+      return new Map(rows.map((row) => [text(row, 'host'), Number(row.n)]))
     },
     search,
     similar,

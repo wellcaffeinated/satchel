@@ -219,6 +219,22 @@ describe('MCP over Streamable HTTP', () => {
     expect(textOf(result)).toContain('needs `project`')
   })
 
+  it('keeps host memories to their machine and lists the machines in the brief', async () => {
+    await client().callTool({
+      name: 'memorize',
+      arguments: { text: 'The nas pool is tank.', topic: 'docker', scope: 'host', host: 'nas' },
+    })
+    const listed = await client().callTool({ name: 'recall', arguments: { host: 'nas' } })
+    expect(textOf(listed)).toContain('[docker | host nas |')
+    const elsewhere = await client().callTool({
+      name: 'recall',
+      arguments: { query: 'pool', host: 'desktop' },
+    })
+    expect(textOf(elsewhere)).toBe('No matching memories.')
+    const brief = textOf(await client().callTool({ name: 'brief', arguments: { host: 'nas' } }))
+    expect(brief).toContain('- nas (1)\nThis machine: nas.')
+  })
+
   it('memorize rejects a malformed topic name', async () => {
     const result = await client().callTool({
       name: 'memorize',

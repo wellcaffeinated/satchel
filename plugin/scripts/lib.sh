@@ -54,6 +54,11 @@ satchel_head() { # dir
   git -C "$1" rev-parse --short --verify --quiet 'HEAD^{commit}' 2>/dev/null
 }
 
+# This machine's name for host-scoped memories: the short hostname, lower-cased.
+satchel_host() {
+  uname -n 2>/dev/null | cut -d. -f1 | tr '[:upper:]' '[:lower:]'
+}
+
 # Escape a string for a JSON value (backslash, double quote; control characters dropped).
 satchel_json_escape() {
   printf '%s' "$1" | tr -d '\000-\037' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'

@@ -43,17 +43,17 @@ export function createSatchelService(options: { store: Store }): SatchelService 
   const { store } = options
 
   async function brief(args: BriefArgs): Promise<string> {
-    const [core, topics] = await Promise.all([store.core(), store.topics()])
+    const [core, topics, hosts] = await Promise.all([store.core(), store.topics(), store.hosts()])
+    const general = { core, topics, hosts, host: args.host }
     if (args.project === undefined) {
-      return renderBrief({ core, topics, checkpoints: [], projectMemoryCount: 0 })
+      return renderBrief({ ...general, checkpoints: [], projectMemoryCount: 0 })
     }
     const [checkpoints, projectMemoryCount] = await Promise.all([
       store.checkpoints(args.project, args.branch),
       store.projectMemoryCount(args.project),
     ])
     return renderBrief({
-      core,
-      topics,
+      ...general,
       project: args.project,
       branch: args.branch,
       checkpoints,
@@ -62,13 +62,14 @@ export function createSatchelService(options: { store: Store }): SatchelService 
   }
 
   async function recall(args: RecallArgs, client: string): Promise<string> {
-    if (args.query === undefined && args.topic === undefined) {
-      throw new SatchelError('invalid', 'Give `query`, `topic`, or both.')
+    if (args.query === undefined && args.topic === undefined && args.host === undefined) {
+      throw new SatchelError('invalid', 'Give `query`, `topic` or `host` (or a combination).')
     }
     const memories = await store.recall({
       query: args.query,
       topic: args.topic,
       project: args.project,
+      host: args.host,
       limit: args.limit ?? RECALL_DEFAULT_LIMIT,
       client,
     })

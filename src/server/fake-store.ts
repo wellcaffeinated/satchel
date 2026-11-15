@@ -2,6 +2,7 @@
 import {
   type Checkpoint,
   type CheckpointInput,
+  type Host,
   type MemorizeInput,
   type Memory,
   type RecallInput,
@@ -73,11 +74,14 @@ export function createFakeStore(seed: FakeStoreSeed = {}): FakeStore {
   async function recall(input: RecallInput): Promise<Memory[]> {
     if (input.topic !== undefined && !triggers.has(input.topic)) throw unknownTopic(input.topic)
     const visible = (m: Memory) =>
-      m.scope !== 'project' || input.project === undefined || m.project === input.project
+      (m.scope !== 'project' || input.project === undefined || m.project === input.project) &&
+      (m.scope !== 'host' || input.host === undefined || m.host === input.host)
+    const hostOnly = input.host !== undefined && !input.query && !input.topic
     const found = [...memories.values()]
       .filter((m) => input.topic === undefined || m.topic === input.topic)
       .filter((m) => matchesQuery(m, input.query))
       .filter(visible)
+      .filter((m) => !hostOnly || m.scope === 'host')
       .slice(0, input.limit ?? 8)
     recallLog.push(...found.map((m) => ({ id: m.id, client: input.client })))
     return found
@@ -148,6 +152,16 @@ export function createFakeStore(seed: FakeStoreSeed = {}): FakeStore {
       .length
   }
 
+  async function hosts(): Promise<Host[]> {
+    const counts = Map.groupBy(
+      [...memories.values()].filter((m) => m.scope === 'host' && m.host !== undefined),
+      (m) => m.host ?? '',
+    )
+    return [...counts]
+      .map(([name, list]) => ({ name, count: list.length }))
+      .toSorted((a, b) => b.count - a.count)
+  }
+
   return {
     recallLog,
     memories,
@@ -162,6 +176,7 @@ export function createFakeStore(seed: FakeStoreSeed = {}): FakeStore {
     dropCheckpoint,
     checkpoints,
     projectMemoryCount,
+    hosts,
     close: async () => {
       state.closed = true
     },

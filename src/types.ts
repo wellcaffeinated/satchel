@@ -31,6 +31,12 @@ export interface Topic {
   count: number // memories in this topic
 }
 
+/** A machine that has host-scoped memories. */
+export interface Host {
+  name: string
+  count: number // host-scoped memories for this machine
+}
+
 export interface MemorizeInput {
   text: string
   topic: string
@@ -51,6 +57,11 @@ export interface RecallInput {
   query?: string
   topic?: string
   project?: string
+  /**
+   * The caller's machine: its host-scoped memories rank first and other machines' are hidden.
+   * Given without query or topic, lists that machine's host-scoped memories.
+   */
+  host?: string
   limit?: number // default 8, max 25
   client: string // for the recall log
 }
@@ -89,5 +100,7 @@ export interface Store {
   checkpoints(project: string, branch?: string): Promise<Checkpoint[]>
   /** Number of project-scoped memories for a project. */
   projectMemoryCount(project: string): Promise<number>
+  /** Machines that have host-scoped memories, most memories first. */
+  hosts(): Promise<Host[]>
   close(): Promise<void>
 }

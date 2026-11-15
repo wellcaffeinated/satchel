@@ -8,6 +8,7 @@ import { log } from '../log.ts'
 import {
   type Checkpoint,
   type CheckpointInput,
+  type Host,
   type MemorizeInput,
   type MemorizeResult,
   type Memory,
@@ -177,17 +178,27 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
   }
 
+  async function hosts(): Promise<Host[]> {
+    return [...index.hostCounts()]
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+  }
+
   async function recall(input: RecallInput): Promise<Memory[]> {
     const query = undefinedIfEmpty(input.query)
     const topic = undefinedIfEmpty(input.topic)
-    if (query === undefined && topic === undefined) {
-      throw new SatchelError('invalid', 'recall needs a query, a topic, or both.')
+    const host = undefinedIfEmpty(input.host)
+    if (query === undefined && topic === undefined && host === undefined) {
+      throw new SatchelError('invalid', 'recall needs a query, a topic or a host.')
     }
     const queryVector = query === undefined ? undefined : await worker.queryVector(query)
     const results = index.search({
       query,
       topic,
       project: undefinedIfEmpty(input.project),
+      host,
+      // A host on its own asks what is known about that machine, not for everything.
+      hostScopedOnly: query === undefined && topic === undefined,
       limit: clampRecallLimit(input.limit),
       queryVector,
     })
@@ -359,6 +370,7 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
       queue.run(() => dropCheckpointLocked(project, branch, source)),
     checkpoints: async (project, branch) => index.listCheckpoints(project, branch),
     projectMemoryCount: async (project) => index.projectMemoryCount(project),
+    hosts,
     sync,
     embeddingsIdle: () => worker.whenIdle(),
     close,

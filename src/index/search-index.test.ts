@@ -57,6 +57,31 @@ describe('search index', () => {
     expect(found.map((m) => m.id)).toEqual(['m_bbbbbbbb', 'm_aaaaaaaa'])
   })
 
+  it('ranks this host first and hides other hosts', () => {
+    const index = create()
+    add(index, memory('m_aaaaaaaa', 'backup schedule for everything'))
+    add(index, memory('m_bbbbbbbb', 'backup schedule', { scope: 'host', host: 'nas' }))
+    add(index, memory('m_cccccccc', 'backup backup schedule', { scope: 'host', host: 'desktop' }))
+    const found = index.search({ query: 'backup schedule', host: 'nas', limit: 10 })
+    expect(found.map((m) => m.id)).toEqual(['m_bbbbbbbb', 'm_aaaaaaaa'])
+    const anywhere = index.search({ query: 'backup schedule', limit: 10 })
+    expect(anywhere.map((m) => m.id).toSorted()).toEqual(['m_aaaaaaaa', 'm_bbbbbbbb', 'm_cccccccc'])
+  })
+
+  it('lists only one host and counts host memories per host', () => {
+    const index = create()
+    add(index, memory('m_aaaaaaaa', 'general fact'))
+    add(index, memory('m_bbbbbbbb', 'nas fact one', { scope: 'host', host: 'nas' }))
+    add(index, memory('m_cccccccc', 'nas fact two', { scope: 'host', host: 'nas' }))
+    add(index, memory('m_dddddddd', 'desktop fact', { scope: 'host', host: 'desktop' }))
+    const listed = index.search({ host: 'nas', hostScopedOnly: true, limit: 10 })
+    expect(listed.map((m) => m.id).toSorted()).toEqual(['m_bbbbbbbb', 'm_cccccccc'])
+    expect([...index.hostCounts()].toSorted()).toEqual([
+      ['desktop', 1],
+      ['nas', 2],
+    ])
+  })
+
   it('fuses vector hits that share no words with the query', () => {
     const index = create()
     add(index, memory('m_aaaaaaaa', 'alpha'))

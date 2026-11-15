@@ -12,7 +12,8 @@ built-in auto memory. The tools come from the `satchel` MCP server.
 
 - Call `brief` once, before other work. The session-start hook names the project and
   branch to pass; if it did not run, use the `origin` remote as `host/owner/repo` (else the
-  directory name) and the current branch. Missing arguments may be filled in from git.
+  directory name) and the current branch, plus `host`, this machine's short hostname.
+  Missing arguments may be filled in from git and the hostname.
 - The brief lists topics, each with a "read before ..." trigger. Before work that matches
   a trigger, call `recall` with that topic. Use `query` for anything not covered by a topic.
 
@@ -29,7 +30,15 @@ Rules:
 - One fact per call, one to five sentences, written so it makes sense without this chat.
 - Do not save what the repo, its docs, or git history already say.
 - Pick an existing topic. A new topic needs `topic_trigger`, one line starting "read before".
-- Scope: `global` by default; `project` for facts about one repository; `host` for one machine.
+- Scope: `global` by default, and for anything not tied to one repository or one machine.
+  - `project` only for facts about that repository (its layout, conventions, decisions).
+  - `host` only for facts about that machine itself: its setup, paths, services, hardware.
+  - Where you happen to be running is not a reason to use `host`. "The user likes cheese"
+    is global even when it was said on the desktop; "the desktop runs Docker rootless" is
+    `host: desktop`. When unsure, use `global`.
+- Pass `host` to `recall` so this machine's memories come first and other machines' stay
+  out. The brief lists which machines have memories of their own; `recall` with only
+  `host` lists what is known about one of them.
 - Read the "similar" list in the reply. If one of them covers the same fact, call `memorize`
   again with `replaces: <id>` to merge into it. Do not leave duplicates.
 - If a recalled memory is wrong or stale, fix it with `replaces`, or `forget` it.

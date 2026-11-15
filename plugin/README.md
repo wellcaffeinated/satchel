@@ -4,10 +4,13 @@ Connects Claude Code to a Satchel memory server so the agent uses it without bei
 
 - **MCP server** `satchel` at `$SATCHEL_URL/mcp`. Authentication is the server's OAuth
   (Cloudflare Managed OAuth in production): run `/mcp` once and sign in.
-- **SessionStart hook**: tells the agent to call `brief` with the current project and branch,
-  and prints the HEAD commit so it can judge the branch checkpoint the brief returns.
-- **PreToolUse hook** on `brief` and `checkpoint`: fills `project`, `branch` and `commit`
-  from git when the agent leaves them out, so project names always match.
+- **SessionStart hook**: tells the agent to call `brief` with the current project, branch and
+  host (this machine's short hostname), prints the HEAD commit so it can judge the branch
+  checkpoint the brief returns, and says when a memory belongs to this machine only.
+- **PreToolUse hook** on `brief`, `recall` and `checkpoint`: fills `project`, `branch`,
+  `commit` and `host` from git and the hostname when the agent leaves them out, so names
+  always match. It never touches `memorize`: tying a memory to a machine is the agent's
+  decision, and the default is global.
 - **PostToolUse hook**: after the agent runs `git commit`, asks it to record a hash-only
   checkpoint (`project`, `branch`, `commit`, no summary).
 - **SessionEnd hook**: a stub. The transcript pass is not built yet.

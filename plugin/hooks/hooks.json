@@ -1,5 +1,5 @@
 {
-  "description": "Satchel: ask for the brief at session start, fill project/branch/commit into brief and checkpoint calls, ask for a hash-only checkpoint after git commit, session-end stub",
+  "description": "Satchel: ask for the brief at session start, fill project/branch/commit/host into brief, recall and checkpoint calls, ask for a hash-only checkpoint after git commit, session-end stub",
   "hooks": {
     "SessionStart": [
       {
@@ -14,7 +14,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "^mcp__(plugin_satchel_)?satchel__(brief|checkpoint)$",
+        "matcher": "^mcp__(plugin_satchel_)?satchel__(brief|recall|checkpoint)$",
         "hooks": [
           {
             "type": "command",

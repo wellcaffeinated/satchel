@@ -3,6 +3,7 @@ import * as z from 'zod'
 import {
   BRANCH_MAX_CHARS,
   COMMIT_MAX_CHARS,
+  HOST_MAX_CHARS,
   MEMORY_MAX_CHARS,
   PROJECT_MAX_CHARS,
   RECALL_DEFAULT_LIMIT,
@@ -15,7 +16,6 @@ import {
 const MEMORY_ID_PATTERN = /^[mc]_[a-z0-9]{8}$/
 const COMMIT_PATTERN = /^\S+$/
 const QUERY_MAX_CHARS = 500
-const HOST_MAX_CHARS = 100
 
 const project = z
   .string()
@@ -25,6 +25,11 @@ const project = z
     'Project id: git origin as host/owner/repo (e.g. github.com/me/app), else the directory name',
   )
 const branch = z.string().min(1).max(BRANCH_MAX_CHARS).describe('Git branch name')
+const thisHost = z
+  .string()
+  .min(1)
+  .max(HOST_MAX_CHARS)
+  .describe("This machine's name (short hostname), if you know it")
 const topic = z
   .string()
   .max(TOPIC_NAME_MAX_CHARS)
@@ -33,6 +38,7 @@ const topic = z
 export const briefShape = {
   project: project.optional(),
   branch: branch.optional(),
+  host: thisHost.optional(),
 }
 
 export const recallShape = {
@@ -44,6 +50,11 @@ export const recallShape = {
     .describe('Words or a question to search for'),
   topic: topic.optional().describe('List memories in this topic'),
   project: project.optional(),
+  host: thisHost
+    .optional()
+    .describe(
+      "This machine's name: its memories rank first, other machines' are left out. Alone, lists what is known about that machine",
+    ),
   limit: z
     .number()
     .int()
@@ -63,9 +74,16 @@ export const memorizeShape = {
   scope: z
     .enum(['global', 'project', 'host'])
     .optional()
-    .describe('global (default), project (needs project), host (needs host)'),
+    .describe(
+      'global (default): anything not tied to one repo or machine, including preferences. project: only true of that repository (needs project). host: only true of that machine, e.g. its setup or paths (needs host)',
+    ),
   project: project.optional(),
-  host: z.string().min(1).max(HOST_MAX_CHARS).optional().describe('Machine name, for scope host'),
+  host: z
+    .string()
+    .min(1)
+    .max(HOST_MAX_CHARS)
+    .optional()
+    .describe('Machine name, used only with scope host. Not just where you are running'),
   // biome-ignore lint/style/useNamingConvention: tool argument name fixed by docs/design.md
   topic_trigger: z
     .string()

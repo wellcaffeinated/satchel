@@ -20,7 +20,8 @@ against; when code and this file disagree, fix one of them in the same change.
 1. **Core**: `core.md`, standing facts and preferences that apply everywhere. Hard cap
    `CORE_MAX_CHARS` (4,000). Loaded by `brief`.
 2. **Map**: one line per topic: name, trigger ("read before ..."), memory count. Rendered
-   from `topics.yaml` plus counts. Loaded in MCP `instructions` and by `brief`.
+   from `topics.yaml` plus counts. Loaded in MCP `instructions` and by `brief`. `brief`
+   also lists the machines that have host-scoped memories, with counts.
 3. **Memories**: one fact per file, fetched only through `recall`.
 
 A **checkpoint** records where work left off on one branch of one project. There is one
@@ -126,6 +127,9 @@ Rules text (final wording belongs in `src/server/`, keep it short):
 - Call `memorize` when the user asks you to remember something, corrects you, states a
   preference, or you learn a non-obvious fact that would have saved time. One fact per
   call. Do not save what the repo or its docs already record.
+- Save memories as global unless they are true only of one repository (scope `project`) or
+  one machine (scope `host`). Preferences and general facts stay global even when learned
+  while working on a particular machine.
 - Call `checkpoint` when stopping work on a branch. A recalled checkpoint is a claim
   about the past: compare its commit with the repo before relying on it.
 
@@ -135,8 +139,8 @@ All tools return text content written for a model to read (compact, no JSON dump
 
 | Tool | Input | Result |
 |---|---|---|
-| `brief` | `project?`, `branch?` | Core, topic map with counts, and when `project` is given: the checkpoint for `branch` (or all checkpoints of the project when no branch) and the count of project-scoped memories. |
-| `recall` | `query?`, `topic?`, `project?`, `limit?` (default 8, max 25) | Matching memories with id, topic, scope, updated date. At least one of `query`, `topic`. With `project`, that project's memories rank first; other projects' project-scoped memories are excluded. Logs each returned id. |
+| `brief` | `project?`, `branch?`, `host?` | Core, topic map with counts, the machines that have host-scoped memories (with counts, and which one is the caller's when `host` is given), and when `project` is given: the checkpoint for `branch` (or all checkpoints of the project when no branch) and the count of project-scoped memories. |
+| `recall` | `query?`, `topic?`, `project?`, `host?`, `limit?` (default 8, max 25) | Matching memories with id, topic, scope, updated date. At least one of `query`, `topic`, `host`. With `project`, that project's memories rank first; other projects' project-scoped memories are excluded. With `host`, the same for that machine's host-scoped memories. `host` without `query` or `topic` lists that machine's host-scoped memories. Logs each returned id. |
 | `memorize` | `text`, `topic`, `scope?` (default `global`), `project?`, `host?`, `topic_trigger?`, `replaces?` | Saves and returns the id, plus up to 3 similar existing memories so the caller can merge. Unknown `topic` without `topic_trigger` is an error that lists existing topics. `replaces: <id>` rewrites that memory in place. |
 | `forget` | `id` | Deletes a memory or checkpoint. |
 | `checkpoint` | `project`, `branch`, `commit`, `summary?`, `done?` | Upserts the checkpoint. `done: true` deletes it (branch merged or removed). |
@@ -146,8 +150,13 @@ Topic names are lowercase kebab-case, at most 32 characters.
 Details settled during the first build:
 
 - `scope: project` requires `project`; `scope: host` requires `host`.
+- A memory is tied to a machine only by `scope: host`. A `host` passed without that scope is
+  ignored, never stored, and the plugin never fills `host` into `memorize`. Agents are told
+  to use `host` only for facts about that machine itself; a preference stated on a machine
+  stays global.
 - `recall` without `project` searches every project's memories; with `project` it
-  excludes other projects' project-scoped memories. An unknown `topic` returns nothing.
+  excludes other projects' project-scoped memories. The same holds for `host`. An unknown
+  `topic` returns nothing.
 - `topic_trigger` on an existing topic is ignored.
 - Checkpoints are shown by `brief`, not `recall`.
 - Limits: project, host and branch 200 characters; commit one token of at most 64;
@@ -242,8 +251,8 @@ or a human in the loop. Three pieces, all runnable from the repo with no network
 the embedding model is cached. The first two are built (`scripts/`); `pnpm eval` is not.
 
 1. **`pnpm sandbox`**: starts the real server on a free loopback port against a
-   temporary data directory seeded from `fixtures/memories/` (32 memories across eight
-   topics, all three scopes and three example projects, plus two checkpoints), committed
+   temporary data directory seeded from `fixtures/memories/` (33 memories across eight
+   topics, all three scopes, three example projects and two hosts, plus two checkpoints), committed
    as a git repository the way the server keeps its own. It uses token auth whatever the
    shell sets, prints the URL and a random token, writes them to `.satchel-sandbox.json`
    (git-ignored) for `pnpm mcp`, and removes the directory and that file on exit.

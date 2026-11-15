@@ -14,6 +14,7 @@ export const RECALL_MAX_LIMIT = 25
 export const CLIENT_NAME_MAX_CHARS = 64
 export const PROJECT_MAX_CHARS = 200
 export const BRANCH_MAX_CHARS = 200
+export const HOST_MAX_CHARS = 100
 export const COMMIT_MAX_CHARS = 64
 export const JSON_BODY_LIMIT_BYTES = 256 * 1024
 

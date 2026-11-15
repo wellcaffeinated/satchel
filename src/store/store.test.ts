@@ -208,6 +208,26 @@ describe('store', () => {
       expect(await store.projectMemoryCount('alpha')).toBe(1)
     })
 
+    it('keeps host memories to their machine and lists the machines', async () => {
+      const store = await open()
+      await memorize(store, 'The nas pool is called tank.', { scope: 'host', host: 'nas' })
+      await memorize(store, 'The desktop pool is called scratch.', {
+        scope: 'host',
+        host: 'desktop',
+      })
+      await memorize(store, 'The user likes cheese.', { host: 'desktop' })
+      const onNas = await store.recall({ query: 'pool called', host: 'nas', client: 'c' })
+      expect(onNas.map((m) => m.text)).toEqual(['The nas pool is called tank.'])
+      const aboutDesktop = await store.recall({ host: 'desktop', client: 'c' })
+      expect(aboutDesktop.map((m) => m.text)).toEqual(['The desktop pool is called scratch.'])
+      const cheese = await store.recall({ query: 'cheese', host: 'nas', client: 'c' })
+      expect(cheese.map((m) => [m.scope, m.host])).toEqual([['global', undefined]])
+      expect(await store.hosts()).toEqual([
+        { name: 'desktop', count: 1 },
+        { name: 'nas', count: 1 },
+      ])
+    })
+
     it('clamps the limit and logs returned ids', async () => {
       const store = await open()
       const ids = await Promise.all(

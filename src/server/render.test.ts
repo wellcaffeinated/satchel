@@ -59,6 +59,7 @@ describe('renderBrief', () => {
     core: 'Prefer pnpm.',
     topics: [{ name: 'svelte', trigger: 'read before Svelte work', count: 3 }],
     projectMemoryCount: 2,
+    hosts: [],
   }
 
   it('has core and the full topic map without a project', () => {
@@ -66,6 +67,31 @@ describe('renderBrief', () => {
     expect(text).toContain('Prefer pnpm.')
     expect(text).toContain('- svelte (3): read before Svelte work')
     expect(text).not.toContain('## Project')
+    expect(text).not.toContain('## Hosts')
+  })
+
+  it('lists the machines that have host memories, and names this one', () => {
+    const hosts = [
+      { name: 'nas', count: 4 },
+      { name: 'desktop', count: 1 },
+    ]
+    const text = renderBrief({ ...base, hosts, host: 'nas', checkpoints: [] })
+    expect(text).toMatch(/^## Hosts \(name \(memories\): recall with host="<name>"/m)
+    expect(text).toContain('- nas (4)\n- desktop (1)\nThis machine: nas.')
+    const elsewhere = renderBrief({ ...base, hosts, host: 'laptop', checkpoints: [] })
+    expect(elsewhere).toContain('This machine: laptop (no host memories).')
+  })
+
+  it('names this machine even when no machine has host memories', () => {
+    const text = renderBrief({ ...base, host: 'laptop', checkpoints: [] })
+    expect(text).toContain('## Hosts')
+    expect(text).toContain('This machine: laptop (no host memories).')
+  })
+
+  it('keeps hostile host names on one line', () => {
+    const hosts = [{ name: 'evil\n- forged (9)', count: 1 }]
+    const text = renderBrief({ ...base, hosts, checkpoints: [] })
+    expect(text.split('\n').filter((line) => line.startsWith('- forged'))).toHaveLength(0)
   })
 
   it('ends with the usage rules, for clients that do not show MCP instructions', () => {

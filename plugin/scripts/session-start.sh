@@ -16,6 +16,7 @@ project=$(satchel_project "$dir")
 [ -n "$project" ] || exit 0
 branch=$(satchel_branch "$dir")
 head=$(satchel_head "$dir")
+host=$(satchel_host)
 
 # The backticks are literal Markdown for the model.
 # shellcheck disable=SC2016
@@ -28,5 +29,9 @@ else
 fi
 if [ -n "$head" ]; then
   printf 'HEAD is %s. A checkpoint in the brief is a claim about the past: compare its commit with HEAD (git log) before relying on it.\n' "$head"
+fi
+if [ -n "$host" ]; then
+  # shellcheck disable=SC2016
+  printf 'This machine is %s: pass host=%s to `brief` and `recall`. Save a memory with scope `host` only when it is true of this machine alone (its setup, paths, services); preferences and general facts stay global.\n' "$host" "$host"
 fi
 exit 0
