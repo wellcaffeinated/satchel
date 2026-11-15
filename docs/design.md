@@ -100,7 +100,7 @@ src/
   auth/             request authentication middleware
   main.ts           wiring and startup
 plugin/             Claude Code plugin (hooks, skill, MCP config)
-docs/               this file, plugin-oauth.md
+docs/               this file, deploy.md, plugin-oauth.md
 ```
 
 `server/` talks to storage only through the `Store` interface in `src/types.ts`.
@@ -235,22 +235,28 @@ hooks hold themselves) are in `docs/plugin-oauth.md`.
 | `CF_ACCESS_AUD` | unset | Access application audience tag |
 | `SATCHEL_AUTH` | unset | `none` to disable auth on loopback |
 
-## Feedback loop for agents (planned, built after the first server runs)
+## Feedback loop for agents
 
 An agent changing Satchel needs to see the effect of a change without a deployed server
 or a human in the loop. Three pieces, all runnable from the repo with no network once
-the embedding model is cached:
+the embedding model is cached. The first two are built (`scripts/`); `pnpm eval` is not.
 
-1. **`pnpm sandbox`**: starts the real server on a random loopback port against a
-   temporary data directory seeded from `fixtures/memories/` (a few dozen realistic
-   memories across topics, scopes and projects), prints the URL and a token, and removes
-   the directory on exit. `--keep` leaves it for inspection.
+1. **`pnpm sandbox`**: starts the real server on a free loopback port against a
+   temporary data directory seeded from `fixtures/memories/` (32 memories across eight
+   topics, all three scopes and three example projects, plus two checkpoints), committed
+   as a git repository the way the server keeps its own. It uses token auth whatever the
+   shell sets, prints the URL and a random token, writes them to `.satchel-sandbox.json`
+   (git-ignored) for `pnpm mcp`, and removes the directory and that file on exit.
+   `--keep` leaves the directory for inspection. Embeddings are off unless `--embed`,
+   which shares the model cache in `./data/models` with `pnpm dev`.
 2. **`pnpm mcp <tool> '<json args>'`**: a thin command-line MCP client built on the SDK.
-   It connects to a running server (the sandbox by default), prints the `instructions`
-   it received with their character count, calls one tool, and prints the result exactly
-   as a model would see it. `pnpm mcp --list` prints the tool names and descriptions with
-   their character counts. This is how an agent checks wording, limits and tool output.
-3. **`pnpm eval`**: retrieval scoring. `fixtures/queries.yaml` holds cases of the form
+   It connects to a running server (the sandbox by default; `--url` and `--token` for
+   another one), prints the `instructions` it received with their character count, calls
+   one tool, and prints the result exactly as a model would see it. `pnpm mcp --list`
+   prints the tool names and descriptions with their character counts. This is how an
+   agent checks wording, limits and tool output. Exit codes: 0 ok, 1 the tool returned
+   an error, 2 the command was invoked wrongly (with the usage text).
+3. **`pnpm eval`** (not built yet): retrieval scoring. `fixtures/queries.yaml` holds cases of the form
    `{ query, project?, expect: [memory ids], reject?: [ids] }`, including paraphrases that
    share no keywords with their target. The command runs every case in three modes
    (full-text only, vectors only, fused) and prints recall@3, recall@8 and mean

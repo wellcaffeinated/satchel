@@ -10,6 +10,8 @@
   "scripts": {
     "dev": "node --experimental-strip-types --watch src/main.ts",
     "start": "node --experimental-strip-types src/main.ts",
+    "sandbox": "node --experimental-strip-types scripts/sandbox.ts",
+    "mcp": "node --experimental-strip-types scripts/mcp.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "lint": "biome check .",

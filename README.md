@@ -17,6 +17,14 @@ curl http://127.0.0.1:8787/healthz                      # ok
 `SATCHEL_EMBED_MODEL=off` skips the embedding model download and uses full-text search only.
 Data goes to `./data` (git-ignored). Other commands: `pnpm test`, `pnpm typecheck`, `pnpm lint`.
 
+To try the tools without a client, start a throwaway server with sample data and call it:
+
+```bash
+pnpm sandbox                                   # in one terminal; Ctrl-C stops and cleans up
+pnpm mcp --list                                # tool descriptions with character counts
+pnpm mcp brief '{"project":"github.com/example/webshop","branch":"main"}'
+```
+
 Use it from Claude Code with the plugin. In production the plugin signs in through the
 server's OAuth (`/mcp`); against the dev server, add the server with the token yourself:
 
@@ -40,6 +48,8 @@ optional cloudflared sidecar.
 ## Docs
 
 - [docs/design.md](docs/design.md): the contract: data layout, tools, auth, configuration.
+- [docs/deploy.md](docs/deploy.md): running it behind Cloudflare Access with Managed OAuth,
+  and connecting Claude Code, claude.ai, Desktop and mobile.
 - [docs/plugin-oauth.md](docs/plugin-oauth.md): how the plugin's hooks work when clients sign
   in through OAuth, what was tested, and the fully automatic options left for later.
 - [plugin/README.md](plugin/README.md): the Claude Code plugin.

@@ -1,0 +1,16 @@
+typescript:
+  trigger: read before writing or reviewing TypeScript
+svelte:
+  trigger: read before Svelte or SvelteKit work
+docker:
+  trigger: read before writing Dockerfiles or compose files, or debugging containers
+git:
+  trigger: read before rebasing, merging or rewriting git history
+testing:
+  trigger: read before writing tests or debugging a failing test
+homelab:
+  trigger: read before changing the home server, its network or its services
+writing:
+  trigger: read before writing docs, commit messages or other prose for the user
+python:
+  trigger: read before Python work or packaging

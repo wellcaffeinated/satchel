@@ -6,6 +6,11 @@ changing anything: it is the contract for the data layout, the tools and the mod
 ## Commands
 
 - `pnpm dev` : run the server with reload (needs an auth mode, e.g. `SATCHEL_TOKEN=dev`)
+- `pnpm sandbox` : the real server on a free loopback port with seeded fixture data; stop
+  with Ctrl-C (`--keep` keeps the data, `--embed` turns embeddings on)
+- `pnpm mcp --list` / `pnpm mcp <tool> '<json>'` : see exactly what a model sees from the
+  running sandbox (instructions, tool descriptions, one call's result). Use these to check
+  any change to tool wording, instructions or result text.
 - `pnpm test` : vitest
 - `pnpm typecheck` : tsc, no emit
 - `pnpm lint` / `pnpm format` : biome
