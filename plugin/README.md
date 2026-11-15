@@ -19,8 +19,8 @@ The hooks never call the server. The OAuth login belongs to Claude Code's MCP co
 a shell hook cannot use it. Claude Code's own `mcp_tool` hooks do use that connection, but
 they are skipped on `SessionStart` at launch and can only pass fields of the hook's JSON
 input, which has no git origin or branch. So the hooks work out the git facts locally and the
-agent makes the calls; the PreToolUse hook makes the arguments exact. See "Hooks and OAuth"
-in `docs/host-setup.md` for the test results and the fully automatic options left for later.
+agent makes the calls; the PreToolUse hook makes the arguments exact. See
+`docs/plugin-oauth.md` for the test results and the fully automatic options left for later.
 
 The hooks need `sh` and `git`. The PreToolUse hook also needs `jq`; without it, it does
 nothing and the agent's arguments are used as written. The hooks make no network calls and

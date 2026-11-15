@@ -40,7 +40,6 @@ optional cloudflared sidecar.
 ## Docs
 
 - [docs/design.md](docs/design.md): the contract: data layout, tools, auth, configuration.
-- [docs/host-setup.md](docs/host-setup.md): Cloudflare tunnel and Access, Managed OAuth, claude.ai,
-  Claude Code, Hermes, backups. Starts with a three-question spike (done: OAuth only) and ends
-  with how the plugin's hooks work without a token.
+- [docs/plugin-oauth.md](docs/plugin-oauth.md): how the plugin's hooks work when clients sign
+  in through OAuth, what was tested, and the fully automatic options left for later.
 - [plugin/README.md](plugin/README.md): the Claude Code plugin.

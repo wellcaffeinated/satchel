@@ -100,7 +100,7 @@ src/
   auth/             request authentication middleware
   main.ts           wiring and startup
 plugin/             Claude Code plugin (hooks, skill, MCP config)
-docs/               this file, host-setup.md
+docs/               this file, plugin-oauth.md
 ```
 
 `server/` talks to storage only through the `Store` interface in `src/types.ts`.
@@ -198,7 +198,7 @@ the same file but never dropped by a rebuild.
 - **Static token** (`SATCHEL_TOKEN`): `Authorization: Bearer <token>`, constant-time
   compare. For local development and same-host clients.
 
-Production decision (after the host-setup spike): every client connects through Managed
+Production decision (after a deployment spike): every client connects through Managed
 OAuth, with no Cloudflare service token and no `SATCHEL_TOKEN`. `SATCHEL_TOKEN` stays for
 local development.
 - **None** (`SATCHEL_AUTH=none`): only honoured when binding to a loopback address.
@@ -220,7 +220,7 @@ Code's MCP connection, so the hooks never call the server. Instead:
 Claude Code's `mcp_tool` hooks do use the MCP connection, but they are skipped on
 `SessionStart` at launch and can only pass fields of the hook's JSON input, which carries
 no git origin or branch. Test results and the fully automatic options (a credential the
-hooks hold themselves) are in `docs/host-setup.md`, "Hooks and OAuth".
+hooks hold themselves) are in `docs/plugin-oauth.md`.
 
 ## Configuration
 
@@ -269,7 +269,7 @@ commit message. When a real recall misses in daily use, add it as a case first.
 - Transcript pass: a background job, started by the plugin's session-start hook, that
   reads unprocessed Claude Code transcripts and submits candidate memories. Submitting
   needs a credential a background job can use; with OAuth only, that means one of the
-  automatic options in `docs/host-setup.md`, "Hooks and OAuth".
+  automatic options in `docs/plugin-oauth.md`.
 - Nightly consolidation: merge duplicates, split oversized topics, rewrite triggers,
   promote often-recalled memories into core. Uses `recall_log`.
 - Import of existing Claude Code memory files and the nuggets repo.
