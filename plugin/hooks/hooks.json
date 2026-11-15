@@ -1,5 +1,5 @@
 {
-  "description": "Satchel: ask for the brief at session start, fill project/branch/commit/host into brief, recall and checkpoint calls, ask for a hash-only checkpoint after git commit, session-end stub",
+  "description": "Satchel: ask for the brief at session start with the work's file types and tags, fill project/branch/commit/host/labels into brief, recall and checkpoint calls, record which labels have rules, ask an agent to load rules before its first edit of a file type, tell subagents Satchel is there, ask for a hash-only checkpoint after git commit, session-end stub",
   "hooks": {
     "SessionStart": [
       {
@@ -7,6 +7,17 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/session-start.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/subagent-start.sh\"",
             "timeout": 5
           }
         ]
@@ -19,12 +30,32 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/fill-arguments.sh\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "^(Write|Edit|MultiEdit|NotebookEdit)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/edit-check.sh\"",
             "timeout": 5
           }
         ]
       }
     ],
     "PostToolUse": [
+      {
+        "matcher": "^mcp__(plugin_satchel_)?satchel__brief$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/labels-seen.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
       {
         "matcher": "Bash",
         "hooks": [

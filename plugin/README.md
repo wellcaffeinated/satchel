@@ -4,17 +4,29 @@ Connects Claude Code to a Satchel memory server so the agent uses it without bei
 
 - **MCP server** `satchel` at `$SATCHEL_URL/mcp`. Authentication is the server's OAuth
   (Cloudflare Managed OAuth in production): run `/mcp` once and sign in.
-- **SessionStart hook**: tells the agent to call `brief` with the current project, branch and
-  host (this machine's short hostname), prints the HEAD commit so it can judge the branch
-  checkpoint the brief returns, and says when a memory belongs to this machine only.
+- **SessionStart hook**: tells the agent to call `brief` with the current project, branch,
+  host (this machine's short hostname) and the work the repository involves: its main file
+  types, the tag `code` when they include code, and tags from top-level dependencies
+  (`package.json`, `requirements.txt`). The rules for that work then load with the brief.
+  Prints the HEAD commit so the agent can judge the checkpoint, and says when a memory
+  belongs to this machine only. After compaction or `/clear` it runs again, and the brief
+  reloads the rules.
 - **PreToolUse hook** on `brief`, `recall` and `checkpoint`: fills `project`, `branch`,
-  `commit` and `host` from git and the hostname when the agent leaves them out, so names
-  always match. It never touches `memorize`: tying a memory to a machine is the agent's
-  decision, and the default is global.
-- **PostToolUse hook**: after the agent runs `git commit`, asks it to record a hash-only
-  checkpoint (`project`, `branch`, `commit`, no summary).
+  `commit`, `host` and, for the main agent's `brief`, the work's `filetypes` and `tags` when
+  the agent leaves them out, so names always match. It records what each agent loads. It
+  never touches `memorize` or `save_reference`: tying a memory to a machine or to some work
+  is the agent's decision.
+- **PostToolUse hook** on `brief`: records which file types and tags have rules, from the
+  brief's `Tags:` and `File types:` lines.
+- **PreToolUse hook** on Write, Edit, MultiEdit and NotebookEdit: before an agent's first
+  edit of a file type whose rules it has not loaded, refuses the edit once, saying which
+  `recall` loads them. The retry goes through regardless. This is how a subagent, or the main
+  agent editing a file type outside the repository's main ones, gets the rules.
+- **SubagentStart hook**: tells each subagent Satchel is available and where it is working.
+- **PostToolUse hook** on `git commit`: asks the agent to record a hash-only checkpoint
+  (`project`, `branch`, `commit`, no summary).
 - **SessionEnd hook**: a stub. The transcript pass is not built yet.
-- **Skill** `satchel`: when to `recall`, `memorize` and `checkpoint`.
+- **Skill** `satchel`: when to `recall`, `memorize`, `save_reference` and `checkpoint`.
 
 ## Why the hooks only prompt
 
@@ -25,9 +37,14 @@ input, which has no git origin or branch. So the hooks work out the git facts lo
 agent makes the calls; the PreToolUse hook makes the arguments exact. See
 `docs/plugin-oauth.md` for the test results and the fully automatic options left for later.
 
-The hooks need `sh` and `git`. The PreToolUse hook also needs `jq`; without it, it does
-nothing and the agent's arguments are used as written. The hooks make no network calls and
-print nothing when `SATCHEL_URL` is unset.
+The hooks need `sh`, `git` and `jq`. Without `jq` the session-start, commit and subagent
+hooks still work; the argument filling, the label recording and the first-edit check do
+nothing, and the agent's own arguments are used. The hooks make no network calls and print
+nothing when `SATCHEL_URL` is unset.
+
+They keep small state files per session and agent under `CLAUDE_PLUGIN_DATA` (or a
+`satchel-plugin` directory in the temp directory): which labels have rules, which ones each
+agent has loaded, and which first edits it has already been asked about.
 
 ## Install
 
