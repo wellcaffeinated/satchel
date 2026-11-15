@@ -197,11 +197,15 @@ instruction to your profile's personal preferences (claude.ai **Settings**):
 
 ```
 At the start of every conversation, call the Satchel `brief` tool before answering, and
-follow the "How to use this memory" rules it returns.
+follow the "How to use this memory" rules it returns. Before writing code, load my coding
+rules: call Satchel `recall` with tags ["code"] and the file types involved, all pages.
 ```
 
 The brief ends with the rules for `recall`, `memorize` and `checkpoint`, so once it is
-loaded the model has what Claude Code gets from the instructions.
+loaded the model has what Claude Code gets from the instructions. The second sentence
+matters for coding: these clients have no hooks, so nothing else loads your coding rules
+when the model starts writing code. In Claude Code the plugin does that (see
+`plugin/README.md`).
 
 Test, in a new chat with the connector switched on: "Call the Satchel brief tool."
 Expected: the brief, ending with a "How to use this memory" section.

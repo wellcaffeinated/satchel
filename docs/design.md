@@ -269,8 +269,9 @@ Details:
 
 `brief` and the `instructions` contain these lines, which the plugin reads:
 
-- `Tags: code (12), rxjs (3)` and `File types: ts (5), py (2)`: every label in use, most
-  used first, with counts. Omitted when no memory or reference carries one.
+- `Tags: code (12), rxjs (3)` and `File types: ts (5), py (2)`: every label a memory
+  carries, most used first, with counts (at most 40 per line). References are not counted,
+  since these lines say what loading can bring in. Omitted when no memory carries one.
 
 ### Other HTTP routes
 
