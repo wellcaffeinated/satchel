@@ -2,6 +2,8 @@
 id: m_fixturaf
 topic: svelte
 scope: global
+filetypes: [ svelte, ts ]
+tags: [ svelte ]
 created: 2026-09-16T14:15:00Z
 updated: 2026-09-16T14:15:00Z
 source: claude-code

@@ -1,5 +1,9 @@
+code-style:
+  trigger: read before writing or reviewing code in any language
 typescript:
   trigger: read before writing or reviewing TypeScript
+linting:
+  trigger: read before setting up or changing a linter or formatter
 svelte:
   trigger: read before Svelte or SvelteKit work
 docker:

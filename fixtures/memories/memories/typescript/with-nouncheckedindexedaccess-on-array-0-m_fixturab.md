@@ -2,6 +2,7 @@
 id: m_fixturab
 topic: typescript
 scope: global
+filetypes: [ ts, tsx, js, mjs ]
 created: 2026-09-04T10:15:00Z
 updated: 2026-09-04T10:15:00Z
 source: claude-ai

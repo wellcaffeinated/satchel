@@ -2,6 +2,7 @@
 id: m_fixtura7
 topic: python
 scope: global
+filetypes: [ py ]
 created: 2026-11-10T13:15:00Z
 updated: 2026-11-10T13:15:00Z
 source: claude-ai
