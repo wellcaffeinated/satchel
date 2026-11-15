@@ -11,7 +11,7 @@ const SCHEMA_VERSION = 1
 const CANDIDATES_PER_LIST = 100
 /** Cosine below this is noise, not a paraphrase. Tuned against bge-small. */
 const VECTOR_MIN_SCORE = 0.52
-/** Cosine at or above this counts as "the same fact" for remember's similar list. */
+/** Cosine at or above this counts as "the same fact" for memorize's similar list. */
 const SIMILAR_MIN_SCORE = 0.75
 const SIMILAR_FTS_CANDIDATES = 10
 const SIMILAR_MIN_TERM_LENGTH = 4

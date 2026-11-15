@@ -11,7 +11,7 @@ Connects Claude Code to a Satchel memory server so the agent uses it without bei
 - **PostToolUse hook**: after the agent runs `git commit`, asks it to record a hash-only
   checkpoint (`project`, `branch`, `commit`, no summary).
 - **SessionEnd hook**: a stub. The transcript pass is not built yet.
-- **Skill** `satchel`: when to `recall`, `remember` and `checkpoint`.
+- **Skill** `satchel`: when to `recall`, `memorize` and `checkpoint`.
 
 ## Why the hooks only prompt
 

@@ -31,7 +31,7 @@ export interface Topic {
   count: number // memories in this topic
 }
 
-export interface RememberInput {
+export interface MemorizeInput {
   text: string
   topic: string
   scope?: Scope // default "global"
@@ -42,7 +42,7 @@ export interface RememberInput {
   source: string
 }
 
-export interface RememberResult {
+export interface MemorizeResult {
   memory: Memory
   similar: Memory[] // up to 3 existing memories close to the new one, excluding itself
 }
@@ -79,7 +79,7 @@ export interface Store {
   /** All topics with counts, most-used first. */
   topics(): Promise<Topic[]>
   recall(input: RecallInput): Promise<Memory[]>
-  remember(input: RememberInput): Promise<RememberResult>
+  memorize(input: MemorizeInput): Promise<MemorizeResult>
   /** Deletes a memory or checkpoint by id. Throws SatchelError("not_found"). */
   forget(id: string, source: string): Promise<void>
   checkpoint(input: CheckpointInput): Promise<Checkpoint>

@@ -200,7 +200,7 @@ At the start of every conversation, call the Satchel `brief` tool before answeri
 follow the "How to use this memory" rules it returns.
 ```
 
-The brief ends with the rules for `recall`, `remember` and `checkpoint`, so once it is
+The brief ends with the rules for `recall`, `memorize` and `checkpoint`, so once it is
 loaded the model has what Claude Code gets from the instructions.
 
 Test, in a new chat with the connector switched on: "Call the Satchel brief tool."

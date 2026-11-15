@@ -35,8 +35,8 @@ describe('store', () => {
     async () =>
       embedder
 
-  async function remember(store: SatchelStore, text: string, extra = {}) {
-    return store.remember({
+  async function memorize(store: SatchelStore, text: string, extra = {}) {
+    return store.memorize({
       text,
       topic: 'general',
       topicTrigger: 'read before anything',
@@ -73,10 +73,10 @@ describe('store', () => {
     })
   })
 
-  describe('remember and recall', () => {
+  describe('memorize and recall', () => {
     it('round trips and commits as satchel with the client name', async () => {
       const store = await open()
-      const { memory } = await remember(store, 'Function bindings in Svelte write to the getter.', {
+      const { memory } = await memorize(store, 'Function bindings in Svelte write to the getter.', {
         topic: 'svelte',
         topicTrigger: 'read before writing Svelte',
       })
@@ -98,16 +98,16 @@ describe('store', () => {
     it('leaves the owner uncommitted edits out of its commits', async () => {
       const store = await open()
       writeFileSync(join(repoDir(), 'core.md'), 'owner edit')
-      await remember(store, 'Something else entirely.')
+      await memorize(store, 'Something else entirely.')
       expect(git(repoDir(), 'status', '--porcelain').trim()).toBe('M core.md')
     })
 
     it('rejects an unknown topic and lists the existing ones', async () => {
       const store = await open()
-      await remember(store, 'First fact.', { topic: 'alpha' })
-      await remember(store, 'Second fact.', { topic: 'beta' })
+      await memorize(store, 'First fact.', { topic: 'alpha' })
+      await memorize(store, 'Second fact.', { topic: 'beta' })
       const error = await store
-        .remember({ text: 'x', topic: 'gamma', source: 'c' })
+        .memorize({ text: 'x', topic: 'gamma', source: 'c' })
         .catch((e: unknown) => e)
       expect(error).toBeInstanceOf(SatchelError)
       expect((error as SatchelError).code).toBe('unknown_topic')
@@ -123,7 +123,7 @@ describe('store', () => {
       ['invalid', { scope: 'project' }],
     ] as const)('rejects bad input with %s', async (code, override) => {
       const store = await open()
-      const error = await remember(store, 'ok text', override).catch((e: unknown) => e)
+      const error = await memorize(store, 'ok text', override).catch((e: unknown) => e)
       expect(error).toBeInstanceOf(SatchelError)
       expect((error as SatchelError).code).toBe(code)
     })
@@ -131,8 +131,8 @@ describe('store', () => {
     it('replaces in place, keeping id and created', async () => {
       const clock = createTickingClock()
       const store = await open({ now: clock })
-      const first = await remember(store, 'Old wording of the fact.')
-      const second = await remember(store, 'New wording of the fact.', {
+      const first = await memorize(store, 'Old wording of the fact.')
+      const second = await memorize(store, 'New wording of the fact.', {
         replaces: first.memory.id,
       })
       expect(second.memory.id).toBe(first.memory.id)
@@ -141,15 +141,15 @@ describe('store', () => {
       const found = await store.recall({ topic: 'general', client: 'c' })
       expect(found.map((m) => m.text)).toEqual(['New wording of the fact.'])
       expect(readdirSync(join(repoDir(), 'memories', 'general'))).toHaveLength(1)
-      await expect(remember(store, 'x', { replaces: 'm_zzzzzzzz' })).rejects.toMatchObject({
+      await expect(memorize(store, 'x', { replaces: 'm_zzzzzzzz' })).rejects.toMatchObject({
         code: 'not_found',
       })
     })
 
     it('moves the file when a replace changes topic', async () => {
       const store = await open()
-      const first = await remember(store, 'A movable fact.', { topic: 'one' })
-      await remember(store, 'A movable fact.', {
+      const first = await memorize(store, 'A movable fact.', { topic: 'one' })
+      await memorize(store, 'A movable fact.', {
         topic: 'two',
         topicTrigger: 'two trigger',
         replaces: first.memory.id,
@@ -181,25 +181,25 @@ describe('store', () => {
       '',
     ])('survives odd query %j', async (query) => {
       const store = await open()
-      await remember(store, 'foo bar and a quoted "thing".')
+      await memorize(store, 'foo bar and a quoted "thing".')
       await expect(store.recall({ query, topic: 'general', client: 'c' })).resolves.toBeDefined()
     })
 
     it('finds stems and hyphenated words', async () => {
       const store = await open()
-      await remember(store, 'The self-hosted servers keep restarting overnight.')
+      await memorize(store, 'The self-hosted servers keep restarting overnight.')
       const found = await store.recall({ query: 'server restart self-hosted', client: 'c' })
       expect(found).toHaveLength(1)
     })
 
     it('filters by project and ranks the project first', async () => {
       const store = await open()
-      await remember(store, 'Deploy notes for alpha service.', {
+      await memorize(store, 'Deploy notes for alpha service.', {
         scope: 'project',
         project: 'alpha',
       })
-      await remember(store, 'Deploy notes for beta service.', { scope: 'project', project: 'beta' })
-      await remember(store, 'Deploy notes everywhere.')
+      await memorize(store, 'Deploy notes for beta service.', { scope: 'project', project: 'beta' })
+      await memorize(store, 'Deploy notes everywhere.')
       const found = await store.recall({ query: 'deploy notes', project: 'alpha', client: 'c' })
       expect(found.map((m) => m.text)).toEqual([
         'Deploy notes for alpha service.',
@@ -211,7 +211,7 @@ describe('store', () => {
     it('clamps the limit and logs returned ids', async () => {
       const store = await open()
       const ids = await Promise.all(
-        Array.from({ length: 3 }, (_, i) => remember(store, `Logged fact number ${i}.`)),
+        Array.from({ length: 3 }, (_, i) => memorize(store, `Logged fact number ${i}.`)),
       ).then((results) => results.map((r) => r.memory.id))
       const found = await store.recall({ topic: 'general', limit: 2, client: 'logger' })
       expect(found).toHaveLength(2)
@@ -227,16 +227,16 @@ describe('store', () => {
 
     it('reports similar memories with FTS when embeddings are off', async () => {
       const store = await open()
-      await remember(store, 'The staging database password rotates every ninety days.')
-      const { similar } = await remember(store, 'Staging database password rotates every quarter.')
+      await memorize(store, 'The staging database password rotates every ninety days.')
+      const { similar } = await memorize(store, 'Staging database password rotates every quarter.')
       expect(similar).toHaveLength(1)
-      const unrelated = await remember(store, 'Completely different topic about bread baking.')
+      const unrelated = await memorize(store, 'Completely different topic about bread baking.')
       expect(unrelated.similar).toEqual([])
     })
 
     it('forgets memories and checkpoints, and errors on unknown ids', async () => {
       const store = await open()
-      const { memory } = await remember(store, 'Temporary fact.')
+      const { memory } = await memorize(store, 'Temporary fact.')
       const cp = await store.checkpoint({ project: 'p', branch: 'b', commit: 'abc', source: 'c' })
       await store.forget(memory.id, 'c')
       await store.forget(cp.id, 'c')
@@ -249,7 +249,7 @@ describe('store', () => {
     it('serialises concurrent writes into one commit each', async () => {
       const store = await open()
       await Promise.all(
-        Array.from({ length: 12 }, (_, i) => remember(store, `Concurrent fact ${i}.`)),
+        Array.from({ length: 12 }, (_, i) => memorize(store, `Concurrent fact ${i}.`)),
       )
       expect(git(repoDir(), 'rev-list', '--count', 'HEAD').trim()).toBe('13')
       expect(git(repoDir(), 'status', '--porcelain').trim()).toBe('')
@@ -356,7 +356,7 @@ describe('store', () => {
   describe('index as a rebuildable cache', () => {
     it('rebuilds from the files after index.sqlite is deleted', async () => {
       const first = await open()
-      const { memory } = await remember(first, 'Persistent fact about kettles.')
+      const { memory } = await memorize(first, 'Persistent fact about kettles.')
       await first.checkpoint({
         project: 'p',
         branch: 'b',
@@ -379,7 +379,7 @@ describe('store', () => {
 
     it('recovers from a corrupt index.sqlite', async () => {
       const first = await open()
-      await remember(first, 'Survives corruption.')
+      await memorize(first, 'Survives corruption.')
       await first.close()
       for (const suffix of ['-wal', '-shm'])
         rmSync(join(dataDir(), `index.sqlite${suffix}`), { force: true })
@@ -390,7 +390,7 @@ describe('store', () => {
 
     it('picks up direct edits, additions and deletions by the owner', async () => {
       const store = await open()
-      await remember(store, 'Seed fact.')
+      await memorize(store, 'Seed fact.')
       const dir = join(repoDir(), 'memories', 'general')
       const handmade = join(dir, 'handmade-m_abcdefgh.md')
       writeFileSync(
@@ -413,7 +413,7 @@ describe('store', () => {
 
     it('skips malformed files and keeps working', async () => {
       const first = await open()
-      await remember(first, 'Good fact about telescopes.')
+      await memorize(first, 'Good fact about telescopes.')
       await first.close()
       const dir = join(repoDir(), 'memories', 'general')
       writeFileSync(join(dir, 'no-frontmatter.md'), 'just text')
@@ -430,7 +430,7 @@ describe('store', () => {
 
     it('skips a duplicate id instead of crashing', async () => {
       const store = await open()
-      const { memory } = await remember(store, 'Original fact about lanterns.')
+      const { memory } = await memorize(store, 'Original fact about lanterns.')
       const dir = join(repoDir(), 'memories', 'general')
       const [file] = readdirSync(dir)
       writeFileSync(join(dir, 'copy.md'), readFileSync(join(dir, file ?? ''), 'utf8'))
@@ -457,11 +457,11 @@ describe('store', () => {
           return embedder
         },
       })
-      await remember(store, 'Always drive the car carefully on ice.', {
+      await memorize(store, 'Always drive the car carefully on ice.', {
         topic: 'cars',
         topicTrigger: 't',
       })
-      await remember(store, 'Bake the bread loaf at a lower heat.', {
+      await memorize(store, 'Bake the bread loaf at a lower heat.', {
         topic: 'food',
         topicTrigger: 't',
       })
@@ -477,15 +477,15 @@ describe('store', () => {
     it('fuses full-text and vector rankings', async () => {
       const store = await open({ embedModel: 'fake-a', embedderLoader: fakeLoader() })
       await store.embeddingsIdle()
-      await remember(store, 'Drive carefully: an automobile needs winter tyres.', {
+      await memorize(store, 'Drive carefully: an automobile needs winter tyres.', {
         topic: 'cars',
         topicTrigger: 't',
       })
-      await remember(store, 'Notes on vehicle taxes and a loaf of bread.', {
+      await memorize(store, 'Notes on vehicle taxes and a loaf of bread.', {
         topic: 'misc',
         topicTrigger: 't',
       })
-      await remember(store, 'Bake the bread loaf at a lower heat.', {
+      await memorize(store, 'Bake the bread loaf at a lower heat.', {
         topic: 'food',
         topicTrigger: 't',
       })
@@ -497,8 +497,8 @@ describe('store', () => {
     it('reports similar memories by vector', async () => {
       const store = await open({ embedModel: 'fake-a', embedderLoader: fakeLoader() })
       await store.embeddingsIdle()
-      await remember(store, 'The automobile needs winter tyres.')
-      const { similar } = await remember(store, 'Vehicle tyres must be changed for winter.')
+      await memorize(store, 'The automobile needs winter tyres.')
+      const { similar } = await memorize(store, 'Vehicle tyres must be changed for winter.')
       expect(similar).toHaveLength(1)
     })
 
@@ -509,7 +509,7 @@ describe('store', () => {
           throw new Error('offline')
         },
       })
-      await remember(store, 'Kettles are great.')
+      await memorize(store, 'Kettles are great.')
       await store.embeddingsIdle()
       expect(await store.recall({ query: 'kettles', client: 'c' })).toHaveLength(1)
     })
@@ -522,7 +522,7 @@ describe('store', () => {
       }
       const store = await open({ embedModel: 'fake-a', embedderLoader: fakeLoader(broken) })
       await store.embeddingsIdle()
-      await remember(store, 'Kettles are great.')
+      await memorize(store, 'Kettles are great.')
       expect(await store.recall({ query: 'kettles', client: 'c' })).toHaveLength(1)
     })
 
@@ -536,8 +536,8 @@ describe('store', () => {
     it('re-embeds everything when the configured model name changes', async () => {
       const first = await open({ embedModel: 'fake-a', embedderLoader: fakeLoader() })
       await first.embeddingsIdle()
-      await remember(first, 'The automobile needs winter tyres.')
-      await remember(first, 'Bake the bread loaf slowly.')
+      await memorize(first, 'The automobile needs winter tyres.')
+      await memorize(first, 'Bake the bread loaf slowly.')
       await first.close()
       expect(storedModels().map((v) => v.model)).toEqual(['fake-a', 'fake-a'])
 
@@ -552,7 +552,7 @@ describe('store', () => {
     it('does not re-embed when the model name is unchanged', async () => {
       const first = await open({ embedModel: 'fake-a', embedderLoader: fakeLoader() })
       await first.embeddingsIdle()
-      await remember(first, 'The automobile needs winter tyres.')
+      await memorize(first, 'The automobile needs winter tyres.')
       await first.close()
       const embedder = createConceptEmbedder(CONCEPTS)
       const second = await open({ embedModel: 'fake-a', embedderLoader: fakeLoader(embedder) })
@@ -563,7 +563,7 @@ describe('store', () => {
     it('embeds memories added by direct edits', async () => {
       const store = await open({ embedModel: 'fake-a', embedderLoader: fakeLoader() })
       await store.embeddingsIdle()
-      await remember(store, 'Seed fact.')
+      await memorize(store, 'Seed fact.')
       writeFileSync(
         join(repoDir(), 'memories', 'general', 'by-hand-m_abcdefgh.md'),
         '---\nid: m_abcdefgh\ntopic: general\ncreated: 2026-01-01T00:00:00Z\n---\nThe automobile needs winter tyres.\n',
@@ -579,10 +579,10 @@ describe('store', () => {
   describe('close', () => {
     it('waits for in-flight writes and rejects later ones', async () => {
       const store = await open()
-      const pending = remember(store, 'In flight when closing.')
+      const pending = memorize(store, 'In flight when closing.')
       await store.close()
       await expect(pending).resolves.toBeDefined()
-      await expect(remember(store, 'Too late.')).rejects.toThrow('closed')
+      await expect(memorize(store, 'Too late.')).rejects.toThrow('closed')
       expect(git(repoDir(), 'status', '--porcelain').trim()).toBe('')
     })
   })

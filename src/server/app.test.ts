@@ -141,8 +141,8 @@ describe('MCP over Streamable HTTP', () => {
       'brief',
       'checkpoint',
       'forget',
+      'memorize',
       'recall',
-      'remember',
     ])
     for (const tool of tools) {
       expect(tool.description?.length ?? 0).toBeLessThan(1000)
@@ -188,9 +188,9 @@ describe('MCP over Streamable HTTP', () => {
     expect(textOf(result)).toContain('svelte')
   })
 
-  it('remember saves with the MCP client name as source and reports similar memories', async () => {
+  it('memorize saves with the MCP client name as source and reports similar memories', async () => {
     const result = await client().callTool({
-      name: 'remember',
+      name: 'memorize',
       arguments: { text: 'Use $state.raw for large arrays.', topic: 'svelte' },
     })
     const text = textOf(result)
@@ -201,27 +201,27 @@ describe('MCP over Streamable HTTP', () => {
     expect(saved?.source).toBe('test-client')
   })
 
-  it('remember with an unknown topic and no trigger lists existing topics', async () => {
+  it('memorize with an unknown topic and no trigger lists existing topics', async () => {
     const result = await client().callTool({
-      name: 'remember',
+      name: 'memorize',
       arguments: { text: 'A fact.', topic: 'brand-new' },
     })
     expect(isError(result)).toBe(true)
     expect(textOf(result)).toMatch(/Existing topics: .*svelte/)
   })
 
-  it('remember checks scope fields', async () => {
+  it('memorize checks scope fields', async () => {
     const result = await client().callTool({
-      name: 'remember',
+      name: 'memorize',
       arguments: { text: 'A fact.', topic: 'svelte', scope: 'project' },
     })
     expect(isError(result)).toBe(true)
     expect(textOf(result)).toContain('needs `project`')
   })
 
-  it('remember rejects a malformed topic name', async () => {
+  it('memorize rejects a malformed topic name', async () => {
     const result = await client().callTool({
-      name: 'remember',
+      name: 'memorize',
       arguments: { text: 'A fact.', topic: 'Bad Topic', topic_trigger: 'read before x' },
     })
     expect(isError(result)).toBe(true)

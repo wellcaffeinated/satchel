@@ -3,25 +3,25 @@
 import { BRANCH_MAX_CHARS, PROJECT_MAX_CHARS, RECALL_DEFAULT_LIMIT } from '../config.ts'
 import { type Memory, SatchelError, type Store } from '../types.ts'
 import { checkpointCommit, renderBrief, renderMemories, renderMemory } from './render.ts'
-import type { BriefArgs, CheckpointArgs, ForgetArgs, RecallArgs, RememberArgs } from './schemas.ts'
+import type { BriefArgs, CheckpointArgs, ForgetArgs, MemorizeArgs, RecallArgs } from './schemas.ts'
 import { flattenLine } from './text.ts'
 
 export interface SatchelService {
   brief(args: BriefArgs): Promise<string>
   recall(args: RecallArgs, client: string): Promise<string>
-  remember(args: RememberArgs, client: string): Promise<string>
+  memorize(args: MemorizeArgs, client: string): Promise<string>
   forget(args: ForgetArgs, client: string): Promise<string>
   checkpoint(args: CheckpointArgs, client: string): Promise<string>
 }
 
 const SCOPE_REQUIREMENTS = {
   global: () => undefined,
-  project: (args: RememberArgs) =>
+  project: (args: MemorizeArgs) =>
     args.project ? undefined : 'scope "project" needs `project` (host/owner/repo).',
-  host: (args: RememberArgs) => (args.host ? undefined : 'scope "host" needs `host`.'),
-} satisfies Record<NonNullable<RememberArgs['scope']>, (args: RememberArgs) => string | undefined>
+  host: (args: MemorizeArgs) => (args.host ? undefined : 'scope "host" needs `host`.'),
+} satisfies Record<NonNullable<MemorizeArgs['scope']>, (args: MemorizeArgs) => string | undefined>
 
-function assertScopeFields(args: RememberArgs): void {
+function assertScopeFields(args: MemorizeArgs): void {
   const problem = SCOPE_REQUIREMENTS[args.scope ?? 'global'](args)
   if (problem) throw new SatchelError('invalid', problem)
 }
@@ -29,7 +29,7 @@ function assertScopeFields(args: RememberArgs): void {
 function similarSection(newId: string, similar: Memory[]): string[] {
   if (similar.length === 0) return []
   return [
-    'Similar existing memories. If one states the same fact, merge: call `remember` with',
+    'Similar existing memories. If one states the same fact, merge: call `memorize` with',
     `replaces=<its id> and the combined text, then \`forget\` ${newId}.`,
     renderMemories(similar),
   ]
@@ -76,9 +76,9 @@ export function createSatchelService(options: { store: Store }): SatchelService 
     return renderMemories(memories)
   }
 
-  async function remember(args: RememberArgs, client: string): Promise<string> {
+  async function memorize(args: MemorizeArgs, client: string): Promise<string> {
     assertScopeFields(args)
-    const { memory, similar } = await store.remember({
+    const { memory, similar } = await store.memorize({
       text: args.text,
       topic: args.topic,
       scope: args.scope ?? 'global',
@@ -112,5 +112,5 @@ export function createSatchelService(options: { store: Store }): SatchelService 
     return `Checkpoint ${saved.id} saved for ${branchLabel(saved.project, saved.branch)} at ${checkpointCommit(saved)}.`
   }
 
-  return { brief, recall, remember, forget, checkpoint }
+  return { brief, recall, memorize, forget, checkpoint }
 }

@@ -8,10 +8,10 @@ import { log } from '../log.ts'
 import {
   type Checkpoint,
   type CheckpointInput,
+  type MemorizeInput,
+  type MemorizeResult,
   type Memory,
   type RecallInput,
-  type RememberInput,
-  type RememberResult,
   SatchelError,
   type Store,
   type Topic,
@@ -27,7 +27,7 @@ import {
   clampRecallLimit,
   cleanClientName,
   validateCheckpoint,
-  validateRemember,
+  validateMemorize,
 } from './validation.ts'
 import { createWriteQueue } from './write-queue.ts'
 
@@ -215,8 +215,8 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
     return memory
   }
 
-  async function rememberLocked(input: RememberInput): Promise<RememberResult> {
-    const fields = validateRemember(input)
+  async function memorizeLocked(input: MemorizeInput): Promise<MemorizeResult> {
+    const fields = validateMemorize(input)
     const source = cleanClientName(input.source)
     const replaced = input.replaces === undefined ? undefined : requireMemory(input.replaces)
     const knownTopics = await topicsFile.read()
@@ -262,7 +262,7 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
     }
     await repo.commit({
       paths: changed,
-      message: commitMessage(replaced ? 'update' : 'remember', `${id} in ${fields.topic}`, source),
+      message: commitMessage(replaced ? 'update' : 'memorize', `${id} in ${fields.topic}`, source),
     })
 
     const vector = await worker.passageVector(fields.text)
@@ -352,7 +352,7 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
     core,
     topics,
     recall,
-    remember: (input) => queue.run(() => rememberLocked(input)),
+    memorize: (input) => queue.run(() => memorizeLocked(input)),
     forget: (id, source) => queue.run(() => forgetLocked(id, source)),
     checkpoint: (input) => queue.run(() => checkpointLocked(input)),
     dropCheckpoint: (project, branch, source) =>

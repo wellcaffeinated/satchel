@@ -1,6 +1,6 @@
 ---
 name: satchel
-description: How to use the Satchel memory server (MCP tools brief, recall, remember, forget, checkpoint). Use when the user mentions memory, remembering or forgetting something, preferences or corrections to keep, resuming work on a branch, or when a topic in the Satchel topic map matches the task.
+description: How to use the Satchel memory server (MCP tools brief, recall, memorize, forget, checkpoint). Use when the user mentions memory, remembering or forgetting something, preferences or corrections to keep, resuming work on a branch, or when a topic in the Satchel topic map matches the task.
 ---
 
 # Using Satchel memory
@@ -16,10 +16,11 @@ built-in auto memory. The tools come from the `satchel` MCP server.
 - The brief lists topics, each with a "read before ..." trigger. Before work that matches
   a trigger, call `recall` with that topic. Use `query` for anything not covered by a topic.
 
-## When to remember
+## When to memorize
 
-Call `remember` when:
+Call `memorize` when:
 
+- the user asks you to remember something,
 - the user corrects you or states a preference,
 - you learn a non-obvious fact that would have saved you time.
 
@@ -29,7 +30,7 @@ Rules:
 - Do not save what the repo, its docs, or git history already say.
 - Pick an existing topic. A new topic needs `topic_trigger`, one line starting "read before".
 - Scope: `global` by default; `project` for facts about one repository; `host` for one machine.
-- Read the "similar" list in the reply. If one of them covers the same fact, call `remember`
+- Read the "similar" list in the reply. If one of them covers the same fact, call `memorize`
   again with `replaces: <id>` to merge into it. Do not leave duplicates.
 - If a recalled memory is wrong or stale, fix it with `replaces`, or `forget` it.
 

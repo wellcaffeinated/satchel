@@ -53,7 +53,7 @@ export const recallShape = {
     .describe(`Max results, default ${RECALL_DEFAULT_LIMIT}`),
 }
 
-export const rememberShape = {
+export const memorizeShape = {
   text: z
     .string()
     .min(1)
@@ -106,6 +106,6 @@ export const checkpointSchema = z.object(checkpointShape)
 
 export type BriefArgs = z.infer<typeof briefSchema>
 export type RecallArgs = z.infer<z.ZodObject<typeof recallShape>>
-export type RememberArgs = z.infer<z.ZodObject<typeof rememberShape>>
+export type MemorizeArgs = z.infer<z.ZodObject<typeof memorizeShape>>
 export type ForgetArgs = z.infer<z.ZodObject<typeof forgetShape>>
 export type CheckpointArgs = z.infer<typeof checkpointSchema>

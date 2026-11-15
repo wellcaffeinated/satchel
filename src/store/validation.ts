@@ -7,7 +7,7 @@ import {
   TOPIC_NAME_PATTERN,
   TRIGGER_MAX_CHARS,
 } from '../config.ts'
-import { type CheckpointInput, type RememberInput, SatchelError, type Scope } from '../types.ts'
+import { type CheckpointInput, type MemorizeInput, SatchelError, type Scope } from '../types.ts'
 
 const IDENTIFIER_MAX_CHARS = 200
 const COMMIT_MAX_CHARS = 64
@@ -72,7 +72,7 @@ export function validateTrigger(trigger: string): string {
   return requireText(trigger.replace(/\s+/g, ' '), 'topic_trigger', TRIGGER_MAX_CHARS)
 }
 
-const SCOPE_FIELDS: Record<Scope, (input: RememberInput) => { project?: string; host?: string }> = {
+const SCOPE_FIELDS: Record<Scope, (input: MemorizeInput) => { project?: string; host?: string }> = {
   global: () => ({}),
   project: (input) => ({
     project: requireText(
@@ -86,7 +86,7 @@ const SCOPE_FIELDS: Record<Scope, (input: RememberInput) => { project?: string; 
   }),
 }
 
-export function validateRemember(input: RememberInput): ValidMemoryFields {
+export function validateMemorize(input: MemorizeInput): ValidMemoryFields {
   const scope = input.scope ?? 'global'
   const scopeFields = SCOPE_FIELDS[scope]
   if (!scopeFields) throw new SatchelError('invalid', `Unknown scope "${String(scope)}".`)

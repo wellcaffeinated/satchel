@@ -2,9 +2,9 @@
 import {
   type Checkpoint,
   type CheckpointInput,
+  type MemorizeInput,
   type Memory,
   type RecallInput,
-  type RememberInput,
   SatchelError,
   type Store,
   type Topic,
@@ -83,7 +83,7 @@ export function createFakeStore(seed: FakeStoreSeed = {}): FakeStore {
     return found
   }
 
-  async function remember(input: RememberInput) {
+  async function memorize(input: MemorizeInput) {
     if (!triggers.has(input.topic)) {
       if (!input.topicTrigger) throw unknownTopic(input.topic)
       triggers.set(input.topic, input.topicTrigger)
@@ -156,7 +156,7 @@ export function createFakeStore(seed: FakeStoreSeed = {}): FakeStore {
     core: async () => coreText,
     topics,
     recall,
-    remember,
+    memorize,
     forget,
     checkpoint,
     dropCheckpoint,

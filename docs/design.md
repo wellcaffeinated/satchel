@@ -123,9 +123,9 @@ Rules text (final wording belongs in `src/server/`, keep it short):
 
 - Call `brief` once at the start of a conversation, with the project and branch if known.
 - Before work that matches a topic's trigger, call `recall` with that topic.
-- Call `remember` when the user corrects you, states a preference, or you learn a
-  non-obvious fact that would have saved time. One fact per call. Do not save what the
-  repo or its docs already record.
+- Call `memorize` when the user asks you to remember something, corrects you, states a
+  preference, or you learn a non-obvious fact that would have saved time. One fact per
+  call. Do not save what the repo or its docs already record.
 - Call `checkpoint` when stopping work on a branch. A recalled checkpoint is a claim
   about the past: compare its commit with the repo before relying on it.
 
@@ -137,7 +137,7 @@ All tools return text content written for a model to read (compact, no JSON dump
 |---|---|---|
 | `brief` | `project?`, `branch?` | Core, topic map with counts, and when `project` is given: the checkpoint for `branch` (or all checkpoints of the project when no branch) and the count of project-scoped memories. |
 | `recall` | `query?`, `topic?`, `project?`, `limit?` (default 8, max 25) | Matching memories with id, topic, scope, updated date. At least one of `query`, `topic`. With `project`, that project's memories rank first; other projects' project-scoped memories are excluded. Logs each returned id. |
-| `remember` | `text`, `topic`, `scope?` (default `global`), `project?`, `host?`, `topic_trigger?`, `replaces?` | Saves and returns the id, plus up to 3 similar existing memories so the caller can merge. Unknown `topic` without `topic_trigger` is an error that lists existing topics. `replaces: <id>` rewrites that memory in place. |
+| `memorize` | `text`, `topic`, `scope?` (default `global`), `project?`, `host?`, `topic_trigger?`, `replaces?` | Saves and returns the id, plus up to 3 similar existing memories so the caller can merge. Unknown `topic` without `topic_trigger` is an error that lists existing topics. `replaces: <id>` rewrites that memory in place. |
 | `forget` | `id` | Deletes a memory or checkpoint. |
 | `checkpoint` | `project`, `branch`, `commit`, `summary?`, `done?` | Upserts the checkpoint. `done: true` deletes it (branch merged or removed). |
 
@@ -179,7 +179,7 @@ use them (see "Plugin and OAuth" below), so they were removed. Everything goes t
   configured one is re-embedded in the background. Similarity is brute-force cosine;
   the store is small and no vector index is wanted.
 - Ranking: reciprocal rank fusion of the FTS order and the cosine order.
-- `remember` uses cosine similarity (or FTS when embeddings are off) to report similar
+- `memorize` uses cosine similarity (or FTS when embeddings are off) to report similar
   existing memories.
 
 `index.sqlite` index tables can be dropped and rebuilt from `repo/` at any time. The
@@ -263,7 +263,7 @@ the embedding model is cached. The first two are built (`scripts/`); `pnpm eval`
    reciprocal rank per mode, then the failing cases with what was returned instead.
    `--model <id>` runs the same cases with another embedding model so models can be
    compared before switching. It also scores duplicate detection: pairs of near-duplicate
-   facts that `remember` should report as similar, and unrelated pairs it should not.
+   facts that `memorize` should report as similar, and unrelated pairs it should not.
 
 Rules for the loop: the eval prints numbers, it does not gate CI, because a threshold on
 a few dozen cases would be noise. A change to ranking, the FTS query builder, the

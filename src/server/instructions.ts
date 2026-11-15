@@ -10,7 +10,7 @@ export const RULES = [
 ].join('\n')
 
 const TOPICS_HEADER = 'Topics (name (memories): when to recall):'
-const NO_TOPICS = 'Topics: none yet. Start one with `remember` and `topic_trigger`.'
+const NO_TOPICS = 'Topics: none yet. Start one with `memorize` and `topic_trigger`.'
 
 export function moreTopicsLine(hidden: number): string {
   return `+${hidden} more topics; call \`brief\` for the full list.`
