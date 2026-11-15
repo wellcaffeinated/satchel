@@ -286,7 +286,8 @@ Rules are meant to arrive when the work starts, not when the agent thinks to ask
   `recall` with tag `code` and the file types involved before writing code.
 - **Claude Code main session** (plugin): the session-start hook works out the repository's
   main file types (from `git ls-files`), the tag `code` when any of them is a programming
-  language, and tags from top-level dependencies (`package.json`, `requirements.txt`). The
+  language, and tags from top-level dependencies (`package.json`, `requirements.txt`; a
+  scoped package gives both forms, `@biomejs/biome` -> `biomejs-biome` and `biome`). The
   PreToolUse hook fills them into the main agent's `brief`, so the rules load with the
   brief, which the agent calls dependably.
 - **First edit of an unloaded file type** (plugin): a PreToolUse hook on Write, Edit,

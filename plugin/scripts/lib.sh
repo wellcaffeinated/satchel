@@ -110,6 +110,13 @@ satchel_tag_of() { # name
     sed -e 's/^@//' -e 's/[^a-z0-9]\{1,\}/-/g' -e 's/^-//' -e 's/-$//'
 }
 
+# A scoped package also gives its bare name (@biomejs/biome -> biomejs-biome and biome), since
+# memories are tagged by what people call the library.
+satchel_tags_of_package() { # name
+  satchel_tag_of "$1"
+  case "$1" in @*/*) satchel_tag_of "${1#*/}" ;; esac
+}
+
 # Top-level dependency names as tags, one per line (package.json needs jq; requirements.txt not).
 satchel_dependency_tags() { # dir
   {
@@ -120,7 +127,7 @@ satchel_dependency_tags() { # dir
     if [ -f "$1/requirements.txt" ]; then
       sed -n 's/^[[:space:]]*\([A-Za-z0-9][A-Za-z0-9._-]*\).*/\1/p' "$1/requirements.txt"
     fi
-  } | grep -v '^@types/' | while IFS= read -r name; do satchel_tag_of "$name"; done |
+  } | grep -v '^@types/' | while IFS= read -r name; do satchel_tags_of_package "$name"; done |
     awk 'NF && !seen[$0]++' | head -n 60
 }
 

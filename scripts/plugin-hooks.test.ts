@@ -97,7 +97,7 @@ describe.skipIf(!HAS_JQ)('plugin hooks', () => {
   it('session start names the work: main file types, code, dependency tags', () => {
     const text = run(sandbox, 'session-start.sh', {})
     expect(text).toContain('project=github.com/example/shop and branch=main')
-    expect(text).toContain('filetypes [ts] and tags [code, sveltejs-kit, rxjs]')
+    expect(text).toContain('filetypes [ts] and tags [code, sveltejs-kit, kit, rxjs]')
     expect(text).not.toContain('png')
     expect(text).not.toContain('types-node')
   })
@@ -112,7 +112,7 @@ describe.skipIf(!HAS_JQ)('plugin hooks', () => {
           project: 'github.com/example/shop',
           branch: 'main',
           filetypes: ['ts'],
-          tags: ['code', 'sveltejs-kit', 'rxjs'],
+          tags: ['code', 'sveltejs-kit', 'kit', 'rxjs'],
         },
       },
     })
@@ -130,7 +130,7 @@ describe.skipIf(!HAS_JQ)('plugin hooks', () => {
       agent_id: 'a1',
     })
     expect(stateFile(sandbox, 'main.loaded')).toBe(
-      'filetype:ts\ntag:code\ntag:sveltejs-kit\ntag:rxjs\n',
+      'filetype:ts\ntag:code\ntag:sveltejs-kit\ntag:kit\ntag:rxjs\n',
     )
     expect(stateFile(sandbox, 'a1.loaded')).toBe('filetype:py\ntag:code\n')
   })
