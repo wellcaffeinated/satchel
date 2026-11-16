@@ -3,9 +3,20 @@
 
 export type Scope = 'global' | 'project' | 'host'
 
+/** What sort of thing a memory states. See docs/design.md "Kind, origin, dates and about". */
+export type MemoryKind = 'rule' | 'fact' | 'event' | 'preference'
+
+/** Where a memory came from: the owner's words, the agent's conclusion, or another system. */
+export type MemoryOrigin = 'stated' | 'inferred' | 'imported'
+
 export interface Memory {
   id: string // "m_" + 8 base32 chars
   topic: string
+  kind: MemoryKind
+  origin: MemoryOrigin
+  date?: string // the day an event happened or will happen; ISO 8601
+  expires?: string // after this the memory no longer applies; ISO 8601
+  about?: string[] // entities the memory concerns, "name" or "kind:name"; absent when empty
   scope: Scope
   project?: string // set when scope is "project"
   host?: string // set when scope is "host"
@@ -28,6 +39,8 @@ export interface Reference {
   host?: string
   filetypes?: string[]
   tags?: string[]
+  about?: string[]
+  expires?: string
   format: string // the content's language, e.g. "jsonc"; "markdown" is stored unfenced
   created: string
   updated: string
@@ -38,27 +51,35 @@ export interface Reference {
 /** A reference without its content, as listings show it. */
 export type ReferenceSummary = Omit<Reference, 'content'>
 
+/**
+ * Fields of a save. With `replaces`, every field left undefined keeps its stored value, so
+ * the required ones are only required for a new reference. `null` clears `expires`; an empty
+ * list clears a label list.
+ */
 export interface SaveReferenceInput {
-  title: string
-  description: string
-  content: string
+  title?: string
+  description?: string
+  content?: string
   format?: string // default "markdown"
-  topic: string
+  topic?: string
   scope?: Scope
   project?: string
   host?: string
   filetypes?: string[]
   tags?: string[]
+  about?: string[]
+  expires?: string | null
   topicTrigger?: string
-  replaces?: string // id of a reference to rewrite in place
+  replaces?: string // id of a reference to update in place
   source: string
 }
 
+/** Where work left off on one thread of one context. See docs/design.md. */
 export interface Checkpoint {
   id: string // "c_" + 8 base32 chars
-  project: string
-  branch: string
-  commit: string
+  context: string // a project id, or any undertaking
+  thread: string // a branch, or "main"
+  commit?: string // only code threads have one
   updated: string
   source: string
   summary: string // may be empty
@@ -77,16 +98,26 @@ export interface Host {
   count: number // host-scoped memories for this machine
 }
 
+/**
+ * Fields of a save. With `replaces`, every field left undefined keeps its stored value, so
+ * `text` and `topic` are only required for a new memory. `null` clears `date` or `expires`;
+ * an empty list clears a label list.
+ */
 export interface MemorizeInput {
-  text: string
-  topic: string
+  text?: string
+  topic?: string
+  kind?: MemoryKind // default "fact"
+  origin?: MemoryOrigin // default "inferred"
+  date?: string | null
+  expires?: string | null
+  about?: string[]
   scope?: Scope // default "global"
   project?: string
   host?: string
   filetypes?: string[]
   tags?: string[]
   topicTrigger?: string // required when the topic does not exist yet
-  replaces?: string // id of a memory to rewrite in place
+  replaces?: string // id of a memory to update in place
   source: string
 }
 
@@ -107,6 +138,10 @@ export interface RecallInput {
   /** Labels of the work at hand: memories match when every label field they set overlaps. */
   filetypes?: string[]
   tags?: string[]
+  /** Entities: memories match when they carry any of these. */
+  about?: string[]
+  /** Keeps only memories of this kind. */
+  kind?: MemoryKind
 }
 
 /** How many memories carry one label value. */
@@ -118,12 +153,13 @@ export interface LabelCount {
 export interface Labels {
   filetypes: LabelCount[]
   tags: LabelCount[]
+  about: LabelCount[]
 }
 
 export interface CheckpointInput {
-  project: string
-  branch: string
-  commit: string
+  context: string
+  thread: string
+  commit?: string // undefined keeps the existing commit; empty string clears it
   summary?: string // undefined keeps the existing summary
   source: string
 }
@@ -141,21 +177,21 @@ export class SatchelError extends Error {
 export interface Store {
   /** Contents of core.md, already capped. */
   core(): Promise<string>
-  /** All topics with counts, most-used first. */
+  /** All topics with counts, most-used first. Expired memories are not counted. */
   topics(): Promise<Topic[]>
   /**
-   * Every match, in the order docs/design.md "Paging" sets: by relevance for a query
+   * Every live match, in the order docs/design.md "Paging" sets: by relevance for a query
    * (at most the search candidates), otherwise all matching memories. Paging is the caller's.
    */
   recall(input: RecallInput): Promise<Memory[]>
   /** Records that these memories were shown to a client. */
   logRecall(input: { ids: string[]; client: string }): Promise<void>
-  /** Every label used by a memory, most used first. */
+  /** Every label used by a live memory, most used first. */
   labels(): Promise<Labels>
   /** References matching a recall request, without content; at most REFERENCES_LISTED_MAX. */
   findReferences(input: RecallInput): Promise<ReferenceSummary[]>
   saveReference(input: SaveReferenceInput): Promise<Reference>
-  /** A memory or reference by id. Throws SatchelError("not_found"). */
+  /** A memory or reference by id, expired or not. Throws SatchelError("not_found"). */
   read(
     id: string,
   ): Promise<{ kind: 'memory'; memory: Memory } | { kind: 'reference'; reference: Reference }>
@@ -163,11 +199,13 @@ export interface Store {
   /** Deletes a memory, reference or checkpoint by id. Throws SatchelError("not_found"). */
   forget(id: string, source: string): Promise<void>
   checkpoint(input: CheckpointInput): Promise<Checkpoint>
-  /** Removes the checkpoint for a branch; no error when there is none. */
-  dropCheckpoint(project: string, branch: string, source: string): Promise<void>
-  /** Checkpoints of a project; one entry when branch is given and exists. */
-  checkpoints(project: string, branch?: string): Promise<Checkpoint[]>
-  /** Number of project-scoped memories for a project. */
+  /** Removes the checkpoint for a thread; no error when there is none. */
+  dropCheckpoint(context: string, thread: string, source: string): Promise<void>
+  /** Checkpoints of a context, most recently updated first; one entry when thread is given and exists. */
+  checkpoints(context: string, thread?: string): Promise<Checkpoint[]>
+  /** The most recently updated checkpoints across every context. */
+  recentCheckpoints(limit: number): Promise<Checkpoint[]>
+  /** Number of live project-scoped memories for a project. */
   projectMemoryCount(project: string): Promise<number>
   /** Machines that have host-scoped memories, most memories first. */
   hosts(): Promise<Host[]>

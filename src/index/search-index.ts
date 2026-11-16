@@ -1,12 +1,26 @@
 import { createHash } from 'node:crypto'
 import { renameSync, rmSync } from 'node:fs'
 import { DatabaseSync, type SQLInputValue, type SQLOutputValue } from 'node:sqlite'
+import {
+  DEFAULT_MEMORY_KIND,
+  DEFAULT_MEMORY_ORIGIN,
+  MEMORY_KINDS,
+  MEMORY_ORIGINS,
+} from '../config.ts'
 import { log } from '../log.ts'
-import type { Checkpoint, Memory, Reference, ReferenceSummary, Scope } from '../types.ts'
+import type {
+  Checkpoint,
+  Memory,
+  MemoryKind,
+  MemoryOrigin,
+  Reference,
+  ReferenceSummary,
+  Scope,
+} from '../types.ts'
 import { matchQueryFromTokens, tokenize, toMatchQuery } from './fts-query.ts'
 import { cosine, reciprocalRankFusion } from './rank.ts'
 
-const SCHEMA_VERSION = 3
+const SCHEMA_VERSION = 4
 /** Candidates taken from each ranked list before fusion. */
 const CANDIDATES_PER_LIST = 100
 /** Cosine below this is noise, not a paraphrase. Tuned against bge-small. */
@@ -34,8 +48,10 @@ const CREATE_INDEX_TABLES = `
   CREATE TABLE files(path TEXT PRIMARY KEY, hash TEXT NOT NULL, kind TEXT NOT NULL, id TEXT NOT NULL);
   CREATE INDEX files_id ON files(id);
   CREATE TABLE memories(
-    id TEXT PRIMARY KEY, topic TEXT NOT NULL, scope TEXT NOT NULL, project TEXT, host TEXT,
-    filetypes TEXT NOT NULL, tags TEXT NOT NULL,
+    id TEXT PRIMARY KEY, topic TEXT NOT NULL, kind TEXT NOT NULL, origin TEXT NOT NULL,
+    date TEXT, expires TEXT, expires_at TEXT,
+    scope TEXT NOT NULL, project TEXT, host TEXT,
+    filetypes TEXT NOT NULL, tags TEXT NOT NULL, about TEXT NOT NULL,
     created TEXT NOT NULL, updated TEXT NOT NULL, source TEXT NOT NULL, text TEXT NOT NULL,
     text_hash TEXT NOT NULL);
   CREATE INDEX memories_topic ON memories(topic);
@@ -44,14 +60,15 @@ const CREATE_INDEX_TABLES = `
   CREATE INDEX labels_value ON labels(kind, value);
   CREATE TABLE reference_docs(
     id TEXT PRIMARY KEY, topic TEXT NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL,
-    scope TEXT NOT NULL, project TEXT, host TEXT, filetypes TEXT NOT NULL, tags TEXT NOT NULL,
+    scope TEXT NOT NULL, project TEXT, host TEXT,
+    filetypes TEXT NOT NULL, tags TEXT NOT NULL, about TEXT NOT NULL, expires TEXT, expires_at TEXT,
     format TEXT NOT NULL, created TEXT NOT NULL, updated TEXT NOT NULL, source TEXT NOT NULL,
     content TEXT NOT NULL);
   CREATE VIRTUAL TABLE reference_docs_fts USING fts5(
     id UNINDEXED, title, description, topic, tokenize = 'porter unicode61');
   CREATE TABLE checkpoints(
-    id TEXT PRIMARY KEY, project TEXT NOT NULL, branch TEXT NOT NULL, commit_hash TEXT NOT NULL,
-    updated TEXT NOT NULL, source TEXT NOT NULL, summary TEXT NOT NULL, UNIQUE(project, branch));
+    id TEXT PRIMARY KEY, context TEXT NOT NULL, thread TEXT NOT NULL, commit_hash TEXT,
+    updated TEXT NOT NULL, source TEXT NOT NULL, summary TEXT NOT NULL, UNIQUE(context, thread));
   CREATE VIRTUAL TABLE memories_fts USING fts5(
     id UNINDEXED, text, topic, tokenize = 'porter unicode61');
   CREATE TABLE vectors(id TEXT PRIMARY KEY, model TEXT NOT NULL, hash TEXT NOT NULL, vec BLOB NOT NULL);
@@ -76,6 +93,9 @@ export interface SearchFilter {
   /** Labels of the work: a memory matches when every label field it sets overlaps. */
   filetypes?: string[]
   tags?: string[]
+  /** Entities: a memory matches when it carries any of them. */
+  about?: string[]
+  kind?: MemoryKind
 }
 
 export interface SearchInput extends SearchFilter {
@@ -114,10 +134,12 @@ export interface SearchIndex {
   findReferences(input: SearchFilter & { query?: string; limit: number }): ReferenceSummary[]
   /** topic -> number of references. */
   referenceTopicCounts(): Map<string, number>
-  findCheckpoint(project: string, branch: string): Checkpoint | undefined
-  listCheckpoints(project: string, branch?: string): Checkpoint[]
+  findCheckpoint(context: string, thread: string): Checkpoint | undefined
+  /** A context's checkpoints, most recently updated first; one when thread is given. */
+  listCheckpoints(context: string, thread?: string): Checkpoint[]
+  recentCheckpoints(limit: number): Checkpoint[]
   topicCounts(): Map<string, number>
-  /** kind ('filetype' | 'tag') -> value -> count, most used first. */
+  /** kind ('filetype' | 'tag' | 'about') -> value -> count, most used first. */
   labelCounts(): { kind: string; value: string; count: number }[]
   projectMemoryCount(project: string): number
   /** host -> number of host-scoped memories. */
@@ -144,6 +166,11 @@ function optionalText(row: Row, key: string): string | undefined {
 }
 
 const SCOPE_BY_NAME: Record<string, Scope> = { global: 'global', project: 'project', host: 'host' }
+const KIND_BY_NAME = new Map<string, MemoryKind>(MEMORY_KINDS.map((kind) => [kind, kind]))
+const ORIGIN_BY_NAME = new Map<string, MemoryOrigin>(
+  MEMORY_ORIGINS.map((origin) => [origin, origin]),
+)
+const MILLIS = /\.\d{3}Z$/
 
 /** Label lists are stored as JSON text beside the row, and one row each in `labels`. */
 function labelList(row: Row, key: string): string[] {
@@ -151,19 +178,34 @@ function labelList(row: Row, key: string): string[] {
   return Array.isArray(parsed) ? parsed.filter((item) => typeof item === 'string') : []
 }
 
-function toMemory(row: Row): Memory {
+/** The scope and label columns shared by memories and references, present only when set. */
+function scopedAndLabelled(row: Row) {
   const project = optionalText(row, 'project')
   const host = optionalText(row, 'host')
   const filetypes = labelList(row, 'filetypes')
   const tags = labelList(row, 'tags')
+  const about = labelList(row, 'about')
   return {
-    id: text(row, 'id'),
-    topic: text(row, 'topic'),
     scope: SCOPE_BY_NAME[text(row, 'scope')] ?? 'global',
     ...(project === undefined ? {} : { project }),
     ...(host === undefined ? {} : { host }),
     ...(filetypes.length === 0 ? {} : { filetypes }),
     ...(tags.length === 0 ? {} : { tags }),
+    ...(about.length === 0 ? {} : { about }),
+  }
+}
+
+function toMemory(row: Row): Memory {
+  const date = optionalText(row, 'date')
+  const expires = optionalText(row, 'expires')
+  return {
+    id: text(row, 'id'),
+    topic: text(row, 'topic'),
+    kind: KIND_BY_NAME.get(text(row, 'kind')) ?? DEFAULT_MEMORY_KIND,
+    origin: ORIGIN_BY_NAME.get(text(row, 'origin')) ?? DEFAULT_MEMORY_ORIGIN,
+    ...(date === undefined ? {} : { date }),
+    ...(expires === undefined ? {} : { expires }),
+    ...scopedAndLabelled(row),
     created: text(row, 'created'),
     updated: text(row, 'updated'),
     source: text(row, 'source'),
@@ -172,20 +214,14 @@ function toMemory(row: Row): Memory {
 }
 
 function toReferenceSummary(row: Row): ReferenceSummary {
-  const project = optionalText(row, 'project')
-  const host = optionalText(row, 'host')
-  const filetypes = labelList(row, 'filetypes')
-  const tags = labelList(row, 'tags')
+  const expires = optionalText(row, 'expires')
   return {
     id: text(row, 'id'),
     topic: text(row, 'topic'),
     title: text(row, 'title'),
     description: text(row, 'description'),
-    scope: SCOPE_BY_NAME[text(row, 'scope')] ?? 'global',
-    ...(project === undefined ? {} : { project }),
-    ...(host === undefined ? {} : { host }),
-    ...(filetypes.length === 0 ? {} : { filetypes }),
-    ...(tags.length === 0 ? {} : { tags }),
+    ...scopedAndLabelled(row),
+    ...(expires === undefined ? {} : { expires }),
     format: text(row, 'format'),
     created: text(row, 'created'),
     updated: text(row, 'updated'),
@@ -194,15 +230,23 @@ function toReferenceSummary(row: Row): ReferenceSummary {
 }
 
 function toCheckpoint(row: Row): Checkpoint {
+  const commit = optionalText(row, 'commit_hash')
   return {
     id: text(row, 'id'),
-    project: text(row, 'project'),
-    branch: text(row, 'branch'),
-    commit: text(row, 'commit_hash'),
+    context: text(row, 'context'),
+    thread: text(row, 'thread'),
+    ...(commit === undefined ? {} : { commit }),
     updated: text(row, 'updated'),
     source: text(row, 'source'),
     summary: text(row, 'summary'),
   }
+}
+
+/** A stored day or timestamp as a sortable UTC instant, for the expiry comparison. */
+function instantOf(value: string | undefined): string | null {
+  if (value === undefined) return null
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().replace(MILLIS, 'Z')
 }
 
 export function hashText(value: string): string {
@@ -221,13 +265,17 @@ function blobToVector(value: SQLOutputValue | undefined): Float32Array {
   return new Float32Array(copy.buffer, 0, Math.floor(copy.byteLength / BYTES_PER_FLOAT))
 }
 
-const LABEL_KINDS = { filetypes: 'filetype', tags: 'tag' } as const
+const LABEL_KINDS = { filetypes: 'filetype', tags: 'tag', about: 'about' } as const
+/** The label kinds that drive loading by work; `about` only filters. */
+const WORK_LABEL_KINDS = `('${LABEL_KINDS.filetypes}', '${LABEL_KINDS.tags}')`
+
+type Clause = { sql: string; params: SQLInputValue[] }
 
 /**
  * One label field of the matching rule: a memory that sets this field must share a value
  * with the request; when the request has no values for it, the memory must not set it.
  */
-function labelFieldClause(kind: string, values: string[]): { sql: string; params: string[] } {
+function labelFieldClause(kind: string, values: string[]): Clause {
   const hasField = `EXISTS (SELECT 1 FROM labels l WHERE l.id = m.id AND l.kind = '${kind}')`
   if (values.length === 0) return { sql: `NOT ${hasField}`, params: [] }
   const placeholders = values.map(() => '?').join(', ')
@@ -237,35 +285,55 @@ function labelFieldClause(kind: string, values: string[]): { sql: string; params
   }
 }
 
-function labelClause(filter: SearchFilter): { sql: string; params: string[] }[] {
+function labelClause(filter: SearchFilter): Clause[] {
   if (filter.filetypes === undefined && filter.tags === undefined) return []
   return [
-    { sql: 'EXISTS (SELECT 1 FROM labels l WHERE l.id = m.id)', params: [] },
+    {
+      sql: `EXISTS (SELECT 1 FROM labels l WHERE l.id = m.id AND l.kind IN ${WORK_LABEL_KINDS})`,
+      params: [],
+    },
     labelFieldClause(LABEL_KINDS.filetypes, filter.filetypes ?? []),
     labelFieldClause(LABEL_KINDS.tags, filter.tags ?? []),
   ]
 }
 
-function filterClause(filter: SearchFilter): { sql: string; params: SQLInputValue[] } {
-  const { topic, project, host, hostScopedOnly } = filter
+/** Any shared entity is a match; an empty request list matches nothing. */
+function aboutClause(about: string[] | undefined): Clause[] {
+  if (about === undefined) return []
+  if (about.length === 0) return [{ sql: '0 = 1', params: [] }]
+  const placeholders = about.map(() => '?').join(', ')
+  return [
+    {
+      sql: `EXISTS (SELECT 1 FROM labels l WHERE l.id = m.id AND l.kind = '${LABEL_KINDS.about}' AND l.value IN (${placeholders}))`,
+      params: about,
+    },
+  ]
+}
+
+/** Expired rows are hidden everywhere but `getMemory`. */
+function liveClause(now: string): Clause {
+  return { sql: '(m.expires_at IS NULL OR m.expires_at > ?)', params: [now] }
+}
+
+function filterClause(filter: SearchFilter, now: string): Clause {
+  const { topic, project, host, hostScopedOnly, kind } = filter
   const parts = [
     { sql: 'm.topic = ?', value: topic },
     { sql: "(m.scope != 'project' OR m.project = ?)", value: project },
     { sql: "(m.scope != 'host' OR m.host = ?)", value: host },
+    { sql: 'm.kind = ?', value: kind },
   ].filter((part) => part.value !== undefined)
-  const hostOnly = hostScopedOnly ? ["m.scope = 'host'"] : []
-  const labels = labelClause(filter)
+  const hostOnly = hostScopedOnly ? [{ sql: "m.scope = 'host'", params: [] }] : []
+  const clauses = [
+    liveClause(now),
+    ...parts.map((part) => ({ sql: part.sql, params: [part.value ?? null] })),
+    ...hostOnly,
+    ...labelClause(filter),
+    ...aboutClause(filter.about),
+  ]
   return {
-    sql: [
-      '1 = 1',
-      ...parts.map((part) => part.sql),
-      ...hostOnly,
-      ...labels.map((label) => label.sql),
-    ].join(' AND '),
-    params: [
-      ...parts.map((part) => part.value ?? null),
-      ...labels.flatMap((label) => label.params),
-    ],
+    sql: ['1 = 1', ...clauses.map((clause) => clause.sql)].join(' AND '),
+    params: clauses.flatMap((clause) => clause.params),
   }
 }
 
@@ -309,8 +377,16 @@ function openDatabase(path: string): DatabaseSync {
   }
 }
 
-export function createSearchIndex({ path }: { path: string }): SearchIndex {
+export function createSearchIndex({
+  path,
+  now = () => new Date(),
+}: {
+  path: string
+  now?: () => Date
+}): SearchIndex {
   const db = openDatabase(path)
+  const nowInstant = () => now().toISOString().replace(MILLIS, 'Z')
+  const liveFilter = (filter: SearchFilter) => filterClause(filter, nowInstant())
 
   function all(sql: string, params: SQLInputValue[] = []): Row[] {
     return db.prepare(sql).all(...params)
@@ -366,17 +442,23 @@ export function createSearchIndex({ path }: { path: string }): SearchIndex {
         memory.id,
       ])
       run(
-        `INSERT INTO memories(id, topic, scope, project, host, filetypes, tags, created, updated,
-           source, text, text_hash)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO memories(id, topic, kind, origin, date, expires, expires_at, scope, project,
+           host, filetypes, tags, about, created, updated, source, text, text_hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           memory.id,
           memory.topic,
+          memory.kind,
+          memory.origin,
+          memory.date ?? null,
+          memory.expires ?? null,
+          instantOf(memory.expires),
           memory.scope,
           memory.project ?? null,
           memory.host ?? null,
           JSON.stringify(memory.filetypes ?? []),
           JSON.stringify(memory.tags ?? []),
+          JSON.stringify(memory.about ?? []),
           memory.created,
           memory.updated,
           memory.source,
@@ -389,14 +471,20 @@ export function createSearchIndex({ path }: { path: string }): SearchIndex {
         memory.text,
         memory.topic,
       ])
-      insertLabels({ id: memory.id, filetypes: memory.filetypes, tags: memory.tags })
+      insertLabels(memory)
     })
   }
 
-  function insertLabels(input: { id: string; filetypes?: string[]; tags?: string[] }): void {
+  function insertLabels(input: {
+    id: string
+    filetypes?: string[]
+    tags?: string[]
+    about?: string[]
+  }): void {
     const rows = [
-      ...(input.filetypes ?? []).map((value) => ['filetype', value]),
-      ...(input.tags ?? []).map((value) => ['tag', value]),
+      ...(input.filetypes ?? []).map((value) => [LABEL_KINDS.filetypes, value]),
+      ...(input.tags ?? []).map((value) => [LABEL_KINDS.tags, value]),
+      ...(input.about ?? []).map((value) => [LABEL_KINDS.about, value]),
     ]
     for (const [kind, value] of rows) {
       run('INSERT INTO labels(id, kind, value) VALUES (?, ?, ?)', [
@@ -424,8 +512,8 @@ export function createSearchIndex({ path }: { path: string }): SearchIndex {
       ])
       run(
         `INSERT INTO reference_docs(id, topic, title, description, scope, project, host, filetypes,
-           tags, format, created, updated, source, content)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           tags, about, expires, expires_at, format, created, updated, source, content)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           reference.id,
           reference.topic,
@@ -436,6 +524,9 @@ export function createSearchIndex({ path }: { path: string }): SearchIndex {
           reference.host ?? null,
           JSON.stringify(reference.filetypes ?? []),
           JSON.stringify(reference.tags ?? []),
+          JSON.stringify(reference.about ?? []),
+          reference.expires ?? null,
+          instantOf(reference.expires),
           reference.format,
           reference.created,
           reference.updated,
@@ -449,7 +540,7 @@ export function createSearchIndex({ path }: { path: string }): SearchIndex {
         reference.description,
         reference.topic,
       ])
-      insertLabels({ id: reference.id, filetypes: reference.filetypes, tags: reference.tags })
+      insertLabels(reference)
     })
   }
 
@@ -459,7 +550,7 @@ export function createSearchIndex({ path }: { path: string }): SearchIndex {
   }
 
   function findReferences(input: SearchFilter & { query?: string; limit: number }) {
-    const clause = filterClause(input)
+    const clause = liveFilter(input)
     const match = input.query?.trim() ? toMatchQuery(input.query) : undefined
     if (input.query?.trim() && !match) return []
     if (match) {
@@ -483,13 +574,13 @@ export function createSearchIndex({ path }: { path: string }): SearchIndex {
   }: Parameters<SearchIndex['upsertCheckpoint']>[0]) {
     transaction(() => {
       claimId({ id: checkpoint.id, path: filePath })
-      const twin = one('SELECT id FROM checkpoints WHERE project = ? AND branch = ? AND id != ?', [
-        checkpoint.project,
-        checkpoint.branch,
+      const twin = one('SELECT id FROM checkpoints WHERE context = ? AND thread = ? AND id != ?', [
+        checkpoint.context,
+        checkpoint.thread,
         checkpoint.id,
       ])
       if (twin)
-        throw new Error(`checkpoint for ${checkpoint.project}@${checkpoint.branch} already exists`)
+        throw new Error(`checkpoint for ${checkpoint.context}@${checkpoint.thread} already exists`)
       removeRowsForId(checkpoint.id)
       run('DELETE FROM files WHERE path = ?', [filePath])
       run('INSERT INTO files(path, hash, kind, id) VALUES (?, ?, ?, ?)', [
@@ -499,13 +590,13 @@ export function createSearchIndex({ path }: { path: string }): SearchIndex {
         checkpoint.id,
       ])
       run(
-        `INSERT INTO checkpoints(id, project, branch, commit_hash, updated, source, summary)
+        `INSERT INTO checkpoints(id, context, thread, commit_hash, updated, source, summary)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [
           checkpoint.id,
-          checkpoint.project,
-          checkpoint.branch,
-          checkpoint.commit,
+          checkpoint.context,
+          checkpoint.thread,
+          checkpoint.commit ?? null,
           checkpoint.updated,
           checkpoint.source,
           checkpoint.summary,
@@ -541,7 +632,7 @@ export function createSearchIndex({ path }: { path: string }): SearchIndex {
     filter: SearchFilter
     limit: number
   }): Memory[] {
-    const clause = filterClause(filter)
+    const clause = liveFilter(filter)
     return all(
       `SELECT m.* FROM memories_fts JOIN memories m ON m.id = memories_fts.id
        WHERE memories_fts MATCH ? AND ${clause.sql}
@@ -563,7 +654,7 @@ export function createSearchIndex({ path }: { path: string }): SearchIndex {
     minScore: number
     limit: number
   }): { id: string; score: number }[] {
-    const clause = filterClause(filter)
+    const clause = liveFilter(filter)
     return all(
       `SELECT m.id AS id, v.vec AS vec FROM vectors v JOIN memories m ON m.id = v.id
        WHERE v.model = ? AND ${clause.sql}`,
@@ -587,7 +678,7 @@ export function createSearchIndex({ path }: { path: string }): SearchIndex {
 
   /** Every match: rules for any file type first, then local, then topic and creation order. */
   function listMatching(input: SearchFilter): Memory[] {
-    const clause = filterClause(input)
+    const clause = liveFilter(input)
     return all(
       `SELECT m.* FROM memories m WHERE ${clause.sql}
        ORDER BY
@@ -607,10 +698,12 @@ export function createSearchIndex({ path }: { path: string }): SearchIndex {
     hostScopedOnly,
     filetypes,
     tags,
+    about,
+    kind,
     limit = CANDIDATES_PER_LIST,
     queryVector,
   }: SearchInput & { query: string }) {
-    const filter = { topic, project, host, hostScopedOnly, filetypes, tags }
+    const filter = { topic, project, host, hostScopedOnly, filetypes, tags, about, kind }
     const match = toMatchQuery(query)
     const textHits = match ? ftsCandidates({ match, filter, limit: CANDIDATES_PER_LIST }) : []
     const vectorHits = queryVector
@@ -708,48 +801,67 @@ export function createSearchIndex({ path }: { path: string }): SearchIndex {
       return kind === 'memory' || kind === 'reference' || kind === 'checkpoint' ? kind : undefined
     },
     getMemory,
-    findCheckpoint(project, branch) {
-      const row = one('SELECT * FROM checkpoints WHERE project = ? AND branch = ?', [
-        project,
-        branch,
+    findCheckpoint(context, thread) {
+      const row = one('SELECT * FROM checkpoints WHERE context = ? AND thread = ?', [
+        context,
+        thread,
       ])
       return row ? toCheckpoint(row) : undefined
     },
-    listCheckpoints(project, branch) {
+    listCheckpoints(context, thread) {
       const rows =
-        branch === undefined
-          ? all('SELECT * FROM checkpoints WHERE project = ? ORDER BY updated DESC', [project])
-          : all('SELECT * FROM checkpoints WHERE project = ? AND branch = ?', [project, branch])
+        thread === undefined
+          ? all('SELECT * FROM checkpoints WHERE context = ? ORDER BY updated DESC, id', [context])
+          : all('SELECT * FROM checkpoints WHERE context = ? AND thread = ?', [context, thread])
       return rows.map(toCheckpoint)
+    },
+    recentCheckpoints(limit) {
+      return all('SELECT * FROM checkpoints ORDER BY updated DESC, id LIMIT ?', [limit]).map(
+        toCheckpoint,
+      )
     },
     upsertReference,
     getReference,
     findReferences,
     referenceTopicCounts() {
-      const rows = all('SELECT topic, count(*) AS n FROM reference_docs GROUP BY topic')
+      const live = liveClause(nowInstant())
+      const rows = all(
+        `SELECT topic, count(*) AS n FROM reference_docs m WHERE ${live.sql} GROUP BY topic`,
+        live.params,
+      )
       return new Map(rows.map((row) => [text(row, 'topic'), Number(row.n)]))
     },
     labelCounts() {
       // Memories only: these lines say what can be loaded, and references never are.
+      const live = liveClause(nowInstant())
       return all(
         `SELECT l.kind, l.value, count(*) AS n FROM labels l JOIN memories m ON m.id = l.id
-         GROUP BY l.kind, l.value ORDER BY l.kind, n DESC, l.value`,
+         WHERE ${live.sql} GROUP BY l.kind, l.value ORDER BY l.kind, n DESC, l.value`,
+        live.params,
       ).map((row) => ({ kind: text(row, 'kind'), value: text(row, 'value'), count: Number(row.n) }))
     },
     topicCounts() {
-      const rows = all('SELECT topic, count(*) AS n FROM memories GROUP BY topic')
+      const live = liveClause(nowInstant())
+      const rows = all(
+        `SELECT topic, count(*) AS n FROM memories m WHERE ${live.sql} GROUP BY topic`,
+        live.params,
+      )
       return new Map(rows.map((row) => [text(row, 'topic'), Number(row.n)]))
     },
     projectMemoryCount(project) {
+      const live = liveClause(nowInstant())
       const row = one(
-        "SELECT count(*) AS n FROM memories WHERE scope = 'project' AND project = ?",
-        [project],
+        `SELECT count(*) AS n FROM memories m WHERE scope = 'project' AND project = ? AND ${live.sql}`,
+        [project, ...live.params],
       )
       return Number(row?.n ?? 0)
     },
     hostCounts() {
+      const live = liveClause(nowInstant())
       const rows = all(
-        "SELECT host, count(*) AS n FROM memories WHERE scope = 'host' AND host IS NOT NULL GROUP BY host",
+        `SELECT host, count(*) AS n FROM memories m
+         WHERE scope = 'host' AND host IS NOT NULL AND ${live.sql} GROUP BY host`,
+        live.params,
       )
       return new Map(rows.map((row) => [text(row, 'host'), Number(row.n)]))
     },

@@ -183,6 +183,48 @@ describe.skipIf(!HAS_JQ)('plugin hooks', () => {
     expect(stateFile(sandbox, 'main.loaded')).toBe('')
   })
 
+  it('fills context, thread and commit into a checkpoint for the local project only', () => {
+    const head = execFileSync('git', ['-C', sandbox.repo, 'rev-parse', '--short', 'HEAD'], {
+      encoding: 'utf8',
+    }).trim()
+    const local = parsed(
+      run(sandbox, 'fill-arguments.sh', {
+        tool_name: tool('checkpoint'),
+        tool_input: { summary: 'Done.' },
+      }),
+    )
+    expect(local).toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'allow',
+        updatedInput: {
+          context: 'github.com/example/shop',
+          thread: 'main',
+          commit: head,
+          summary: 'Done.',
+        },
+      },
+    })
+    const elsewhere = run(sandbox, 'fill-arguments.sh', {
+      tool_name: tool('checkpoint'),
+      tool_input: { context: 'grant-proposal', summary: 'Budget drafted.' },
+    })
+    expect(elsewhere).toBe('')
+    const legacy = parsed(
+      run(sandbox, 'fill-arguments.sh', {
+        tool_name: tool('checkpoint'),
+        tool_input: { project: 'github.com/example/shop', branch: 'dev', commit: 'abc' },
+      }),
+    )
+    const updated = (legacy.hookSpecificOutput as Record<string, unknown>).updatedInput
+    expect(updated).toEqual({ context: 'github.com/example/shop', thread: 'dev', commit: 'abc' })
+  })
+
+  it('asks for a hash-only checkpoint by context and thread after a commit', () => {
+    const output = parsed(run(sandbox, 'commit-checkpoint.sh', {}))
+    const context = String((output.hookSpecificOutput as Record<string, unknown>).additionalContext)
+    expect(context).toContain('context=github.com/example/shop, thread=main, commit=')
+  })
+
   it('tells subagents where they are working', () => {
     const output = parsed(
       run(sandbox, 'subagent-start.sh', { agent_id: 'a1', agent_type: 'Explore' }),

@@ -27,13 +27,41 @@ against; when code and this file disagree, fix one of them in the same change.
    host-scoped memories.
 3. **Memories**: one rule or fact per file. The first paragraph states it; examples, such
    as code blocks, may follow. Fetched through `recall`, or loaded by `brief` when their
-   labels match the work (see "Loading by file type and tag").
+   labels match the work (see "Loading by file type and tag"). Each has a `kind` and an
+   `origin`, may carry a `date` and an `expires` time, and may say what it is `about`
+   (see "Kind, origin, dates and about").
 4. **References**: verbatim material an agent consults or copies (a `biome.json`, a
    template, a checklist), with a title and a one-line description. Never loaded
    automatically: `recall` lists them by title, `read` returns the content.
 
-A **checkpoint** records where work left off on one branch of one project. There is one
-per `(project, branch)`, overwritten on each update.
+A **checkpoint** records where work left off on one thread of one context. A context is
+anything work happens in: a repository (its project id) or an undertaking with no code
+("grant-proposal"). A thread is one line of work inside it: a git branch, or `main` when
+there is only one. There is one checkpoint per `(context, thread)`, overwritten on each
+update. The `commit` is optional: only code threads have one.
+
+### Kind, origin, dates and about
+
+Not everything worth remembering is a rule. A memory says what sort of thing it is, so a
+reader can treat a standing rule, a dated event and a guess differently:
+
+- `kind`: `rule` (how to do something; most carry labels), `fact` (something true of the
+  world or the owner, the default), `event` (something that happened or will happen, with
+  a `date`), `preference` (what the owner likes or wants, stated or observed).
+- `origin`: `stated` (the owner said it, in so many words), `inferred` (the agent concluded
+  it from what it saw; the default), `imported` (copied from another system or file). An
+  agent says "you told me" only for `stated`. Consolidation (future) trusts them in that
+  order.
+- `date`: the day an `event` happened or will happen, `YYYY-MM-DD` or a full timestamp.
+  Required for `kind: event`, allowed on any kind.
+- `expires`: a day or timestamp after which the memory no longer applies. Expired memories
+  are hidden from `recall`, `brief`, the similar-memory check and every count; `read`
+  still returns one by id. Nothing deletes them yet (see "Future plans").
+- `about`: what the memory concerns: entities, each `name` or `kind:name` in lowercase
+  kebab-case (`alice`, `person:alice`, `place:lisbon`, `project:garden-shed`). Up to 10,
+  each at most 48 characters. `recall` with `about` returns memories sharing any of them.
+  `about` is separate from `tags` because tags drive automatic loading and are listed in
+  the instructions; `about` only filters and is listed in the brief.
 
 ### Labels: `filetypes` and `tags`
 
@@ -67,7 +95,7 @@ $SATCHEL_DATA/
     topics.yaml               { <topic>: { trigger: "<one line>" } }
     memories/<topic>/<slug>-<id>.md
     references/<topic>/<slug>-<id>.md
-    checkpoints/<project-slug>/<branch-slug>.md
+    checkpoints/<context-slug>/<thread-slug>.md
   index.sqlite                rebuildable search index, plus the recall log
   models/                     embedding model cache, downloaded on first run
 ```
@@ -87,6 +115,11 @@ topic: code-design
 scope: global            # global | project | host
 project: github.com/example/app   # only when scope is project
 host: nas                # only when scope is host
+kind: rule               # rule | fact | event | preference; fact when absent
+origin: stated           # stated | inferred | imported; inferred when absent
+date: 2026-12-03         # optional; required for kind event
+expires: 2027-01-01      # optional
+about: [person:alice]    # optional
 filetypes: [ts, js]      # optional
 tags: [code]             # optional
 created: 2026-11-12T18:04:00Z
@@ -135,25 +168,29 @@ source: claude-code
 - The content is stored verbatim inside one fenced block whose fence is longer than any
   backtick run in the content; `format: markdown` stores it unfenced. `REFERENCE_MAX_CHARS`
   is 64,000. Title at most 120 characters, description at most 300.
-- Scope, `project`, `host`, `filetypes` and `tags` work as for memories. Only the title and
-  description are searched; the content is not embedded.
+- Scope, `project`, `host`, `filetypes`, `tags`, `about` and `expires` work as for
+  memories; references have no kind, origin or date. Only the title and description are
+  searched; the content is not embedded.
 
 ### Checkpoint file
 
 ```markdown
 ---
 id: c_7q2m4t8a
-project: github.com/example/satchel
-branch: main
-commit: 3f2a9c1
+context: github.com/example/satchel
+thread: main
+commit: 3f2a9c1          # only for code threads
 updated: 2026-11-12T18:04:00Z
 source: claude-code
 ---
 Store and index modules done. Next: wire recall logging into the nightly job.
 ```
 
-`project` is a free-form string chosen by the client. The plugin uses the `origin`
-remote reduced to `host/owner/repo`, or the directory name when there is no remote.
+`context` is a free-form string chosen by the client. For a repository the plugin uses
+the `origin` remote reduced to `host/owner/repo`, or the directory name when there is no
+remote, so a project's checkpoints are found by its project id. `thread` is the branch
+there, and `main` by default elsewhere. Files written before contexts existed carry
+`project` and `branch` instead; they are read as `context` and `thread`.
 The body (summary) may be empty: after each commit the plugin asks the agent for a
 hash-only checkpoint, which keeps any existing summary. At most 3,000 characters.
 
@@ -204,8 +241,9 @@ Rules text (final wording belongs in `src/server/`, keep it short):
 - Save memories as global unless they are true only of one repository (scope `project`) or
   one machine (scope `host`). Preferences and general facts stay global even when learned
   while working on a particular machine.
-- Call `checkpoint` when stopping work on a branch. A recalled checkpoint is a claim
-  about the past: compare its commit with the repo before relying on it.
+- Call `checkpoint` when stopping work on a thread (a branch, or any undertaking that
+  spans conversations). A recalled checkpoint is a claim about the past: compare its
+  commit with the repo before relying on it.
 
 ### Tools
 
@@ -213,19 +251,35 @@ All tools return text content written for a model to read (compact, no JSON dump
 
 | Tool | Input | Result |
 |---|---|---|
-| `brief` | `project?`, `branch?`, `host?`, `filetypes?`, `tags?` | Core; topic map with counts; the labels lines; the machines that have host-scoped memories (and which is the caller's when `host` is given); with `filetypes` or `tags`, a "Loaded for this work" section holding every matching memory in full plus the titles of matching references, paged like `recall`; with `project`, the checkpoint for `branch` (or all of the project's checkpoints) and the count of project-scoped memories; the usage rules. |
-| `recall` | `query?`, `topic?`, `project?`, `host?`, `filetypes?`, `tags?`, `limit?`, `offset?` | Matching memories in full, then matching references by title. At least one of `query`, `topic`, `host`, `filetypes`, `tags`. With `query` it searches; without, it lists. Paged (see below). Logs each returned memory id. |
-| `memorize` | `text`, `topic`, `scope?` (default `global`), `project?`, `host?`, `filetypes?`, `tags?`, `topic_trigger?`, `replaces?` | Saves and returns the id, plus up to 3 similar existing memories so the caller can merge. Unknown `topic` without `topic_trigger` is an error that lists existing topics. `replaces: <id>` rewrites that memory in place. |
-| `save_reference` | `title`, `description`, `content`, `format?` (default `markdown`), `topic`, `scope?`, `project?`, `host?`, `filetypes?`, `tags?`, `topic_trigger?`, `replaces?` | Saves verbatim material and returns its id. |
+| `brief` | `project?`, `branch?`, `context?`, `thread?`, `host?`, `filetypes?`, `tags?` | Core; topic map with counts; the labels lines and the `About:` line; the machines that have host-scoped memories (and which is the caller's when `host` is given); with `filetypes` or `tags`, a "Loaded for this work" section holding every matching memory in full plus the titles of matching references, paged like `recall`; with `project`, the count of project-scoped memories and the checkpoint for `branch` (or all of the project's checkpoints); with `context` (default: `project`) and `thread` (default: `branch`) the same for any context; with neither, the most recently updated checkpoints, one line each; the usage rules. |
+| `recall` | `query?`, `topic?`, `project?`, `host?`, `filetypes?`, `tags?`, `about?`, `kind?`, `limit?`, `offset?` | Matching memories in full, then matching references by title. At least one of `query`, `topic`, `host`, `filetypes`, `tags`, `about`. With `query` it searches; without, it lists. `kind` keeps only memories of that kind. Paged (see below). Logs each returned memory id. |
+| `memorize` | `text`, `topic`, `kind?` (default `fact`), `origin?` (default `inferred`), `date?`, `expires?`, `about?`, `scope?` (default `global`), `project?`, `host?`, `filetypes?`, `tags?`, `topic_trigger?`, `replaces?` | Saves and returns the id, plus up to 3 similar existing memories so the caller can merge. Unknown `topic` without `topic_trigger` is an error that lists existing topics. `replaces: <id>` updates that memory in place: every field left out keeps its stored value, so `text` and `topic` become optional (see "Updating in place"). |
+| `save_reference` | `title`, `description`, `content`, `format?` (default `markdown`), `topic`, `scope?`, `project?`, `host?`, `filetypes?`, `tags?`, `about?`, `expires?`, `topic_trigger?`, `replaces?` | Saves verbatim material and returns its id. `replaces` updates in place the same way, so `title`, `description` and `content` become optional. |
 | `read` | `id` | The full content of a reference (`r_...`), or of a memory (`m_...`). |
 | `forget` | `id` | Deletes a memory, reference or checkpoint. |
-| `checkpoint` | `project`, `branch`, `commit`, `summary?`, `done?` | Upserts the checkpoint. `done: true` deletes it (branch merged or removed). |
+| `checkpoint` | `context`, `thread?` (default `main`), `commit?`, `summary?`, `done?` | Upserts the checkpoint. `done: true` deletes it (thread merged, finished or abandoned). |
 
 Topic names are lowercase kebab-case, at most 32 characters.
+
+#### Updating in place
+
+`memorize` and `save_reference` with `replaces` are patches, not rewrites. A field the
+call leaves out keeps the stored value; a field it gives replaces it. To clear a list
+(`filetypes`, `tags`, `about`) pass `[]`; to clear `date` or `expires` pass `null`.
+`scope` given without `project` or `host` keeps the stored one when the scope still
+needs it; `scope: global` drops both. `source` becomes the updating client, `updated`
+moves, `created` and `id` stay. A `topic` change moves the file. The new state is
+validated as a whole, so a patch can never leave a memory in a state `memorize` would
+have refused.
 
 Details:
 
 - `scope: project` requires `project`; `scope: host` requires `host`.
+- `kind: event` requires `date`. `date` and `expires` accept `YYYY-MM-DD` or an ISO 8601
+  timestamp; a bare day means midnight UTC. A memory is expired once `expires` is not
+  after the time of the request.
+- `about` on `recall` matches memories (and references) carrying any of the given values.
+  Alone, it lists them; with `query`, `topic` or labels it narrows the result.
 - A memory is tied to a machine only by `scope: host`. A `host` passed without that scope is
   ignored, never stored, and the plugin never fills `host` into `memorize`. Agents are told
   to use `host` only for facts about that machine itself; a preference stated on a machine
@@ -235,10 +289,20 @@ Details:
   alone lists that machine's host-scoped memories. An unknown `topic` returns nothing.
 - `filetypes` and `tags` given to `recall` or `brief` select memories by the matching rule
   above. Combined with `query` or `topic`, they narrow the result further.
+- A memory renders as one entry, `- m_x [topic | scope | kind | origin | date: … |
+  expires: … | filetypes: … | tags: … | about: … | updated] text`, with `kind` and
+  `origin` shown only when they are not the defaults and the rest only when set, so a
+  plain inferred fact reads `[topic | scope | updated]`. Continuation lines are indented.
+- `brief` shows checkpoints under `## Project <id>` when the context is the project, under
+  `## Context <name>` otherwise, and with no context as `## Recent checkpoints`, one line
+  each (`- context @ thread (commit, updated): summary`), at most `RECENT_CHECKPOINTS_MAX`
+  (10).
 - `topic_trigger` on an existing topic is ignored.
-- Checkpoints are shown by `brief`, not `recall`.
-- Limits: project, host and branch 200 characters; commit one token of at most 64;
-  checkpoint summary 3,000.
+- Checkpoints are shown by `brief`, not `recall`. `brief` with `project` looks up the
+  context named by the project id, so a repository's checkpoints need nothing more than
+  what the plugin already passes; `context` and `thread` are for work outside one.
+- Limits: project, host, context and thread 200 characters; commit one token of at most
+  64; checkpoint summary 3,000.
 - The transport is stateless, so the writer's name from `initialize` is carried in the
   `Mcp-Session-Id` value and read back on later requests. It is a label, not a credential.
 - Tool results are text only, with no `structuredContent`, because some clients show the
@@ -272,6 +336,8 @@ Details:
 - `Tags: code (12), rxjs (3)` and `File types: ts (5), py (2)`: every label a memory
   carries, most used first, with counts (at most 40 per line). References are not counted,
   since these lines say what loading can bring in. Omitted when no memory carries one.
+- `About: person:alice (4), place:lisbon (2)`, in `brief` only: every `about` value a live
+  memory carries, most used first, at most 40. Omitted when none.
 
 ### Other HTTP routes
 
@@ -417,13 +483,27 @@ a few dozen cases would be noise. A change to ranking, the FTS query builder, th
 embedding model or the similarity cutoff must quote the before and after numbers in its
 commit message. When a real recall misses in daily use, add it as a case first.
 
-## Not built yet
+## Future plans
 
+Not built. Listed so that nothing built now closes the door on them.
+
+- **Consolidation job and the recall log.** A nightly pass that reads `recall_log` and the
+  files: delete expired memories (today they are only hidden), report memories not
+  recalled for six months, merge near-duplicates across topics, split oversized topics,
+  and propose promotions into core. It must trust `origin: stated` over `inferred`. The
+  brief and listings would show `last_recalled` so the owner sees it too. Needs a
+  credential a background job can use; with OAuth only, that means one of the automatic
+  options in `docs/plugin-oauth.md`.
+- **Topic management.** Rename a topic, rewrite its trigger, merge two topics, through one
+  tool or through the consolidation job. Today `topic_trigger` on an existing topic is
+  ignored and a mis-named topic is permanent unless the owner edits `topics.yaml` and
+  moves the files by hand.
+- **Links between memories.** Optional `related: [m_...]` and `supersedes: m_...` in the
+  frontmatter, rendered as one line after the memory, so a reader can follow a thread
+  without a graph. `supersedes` would let `memorize` keep the old memory as history
+  instead of overwriting it.
 - Transcript pass: a background job, started by the plugin's session-start hook, that
-  reads unprocessed Claude Code transcripts and submits candidate memories. Submitting
-  needs a credential a background job can use; with OAuth only, that means one of the
-  automatic options in `docs/plugin-oauth.md`.
-- Nightly consolidation: merge duplicates, split oversized topics, rewrite triggers,
-  promote often-recalled memories into core. Uses `recall_log`.
+  reads unprocessed Claude Code transcripts and submits candidate memories. The same
+  credential problem as the consolidation job.
 - Import of existing Claude Code memory files and the nuggets repo, and of a notebook
-  style guide into labelled memories and references.
+  style guide into labelled memories and references, with `origin: imported`.

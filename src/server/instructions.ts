@@ -30,7 +30,7 @@ function usedBy(lines: string[]): number {
   return lines.reduce((total, line) => total + line.length + 1, 0)
 }
 
-const NO_LABELS: Labels = { filetypes: [], tags: [] }
+const NO_LABELS: Labels = { filetypes: [], tags: [], about: [] }
 
 /** The topic lines that fit in `budget`, ending with a pointer to `brief` when some do not. */
 function topicLinesWithin(topics: Topic[], budget: number): string[] {

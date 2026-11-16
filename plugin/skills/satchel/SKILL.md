@@ -1,6 +1,6 @@
 ---
 name: satchel
-description: How to use the Satchel memory server (MCP tools brief, recall, memorize, save_reference, read, forget, checkpoint). Use when the user mentions memory, remembering or forgetting something, preferences or corrections to keep, resuming work on a branch, or when a topic in the Satchel topic map matches the task.
+description: How to use the Satchel memory server (MCP tools brief, recall, memorize, save_reference, read, forget, checkpoint). Use when the user mentions memory, remembering or forgetting something, preferences or corrections to keep, resuming work on a branch or any undertaking, people, places, dates or plans worth keeping, or when a topic in the Satchel topic map matches the task.
 ---
 
 # Using Satchel memory
@@ -48,6 +48,16 @@ Rules:
   block, when the rule is unclear without one.
 - Do not save what the repo, its docs, or git history already say.
 - Pick an existing topic. A new topic needs `topic_trigger`, one line starting "read before".
+- Say what kind of memory it is: `rule` (how to do something; most carry labels), `fact`
+  (the default), `event` (something that happened or will happen, with `date`), or
+  `preference` (what the user likes or wants). Set `origin: stated` when the user said it in
+  so many words; leave the default `inferred` when you concluded it. Only say "you told me"
+  about a `stated` memory.
+- Name who or what it concerns in `about`, as `name` or `kind:name` (`person:alice`,
+  `place:lisbon`, `project:garden-shed`). `recall` with `about` lists everything about them.
+  Use `about` for people, places and things; use `tags` only for work that rules load for.
+- Set `expires` on anything perishable (a plan, an offer, a temporary setup). Expired
+  memories disappear from `recall` and the brief on their own.
 - Scope: `global` by default, and for anything not tied to one repository or one machine.
   - `project` only for facts about that repository (its layout, conventions, decisions).
   - `host` only for facts about that machine itself: its setup, paths, services, hardware.
@@ -62,8 +72,11 @@ Rules:
   out. The brief lists which machines have memories of their own; `recall` with only
   `host` lists what is known about one of them.
 - Read the "similar" list in the reply. If one of them covers the same fact, call `memorize`
-  again with `replaces: <id>` to merge into it. Do not leave duplicates.
-- If a recalled memory is wrong or stale, fix it with `replaces`, or `forget` it.
+  again with `replaces: <id>` and the combined text to merge into it, then `forget` the new
+  one. Do not leave duplicates.
+- If a recalled memory is wrong or stale, fix it with `replaces`, or `forget` it. A call with
+  `replaces` is a patch: give only the fields that change, and the rest keep their stored
+  values (`[]` clears a list, `null` clears `date` or `expires`).
 
 ## References
 
@@ -75,11 +88,18 @@ Rules:
 
 ## Checkpoints
 
-- When you stop work on a branch, call `checkpoint` with `project`, `branch`, `commit`, and a
-  `summary`: what is done, what is next, what is half-finished.
+- A checkpoint records where work stopped on one `thread` of one `context`. In a repository
+  the context is the project id and the thread is the branch; the hooks fill both. For work
+  outside a repository (a document, a plan, a trip) the context is a short name for the
+  undertaking (`grant-proposal`) and the thread is `main` unless there are several lines of
+  work.
+- When you stop work, call `checkpoint` with a `summary`: what is done, what is next, what
+  is half-finished, and `commit` (HEAD) for code.
 - After each `git commit` a hook asks you to record the new commit. Call `checkpoint` with
-  the project, branch and commit it gives and no `summary`, so the stored summary is kept.
-- Use `done: true` once the branch is merged or deleted.
+  the context, thread and commit it gives and no `summary`, so the stored summary is kept.
+- Use `done: true` once the branch is merged or deleted, or the undertaking is finished.
+- `brief` with `project` and `branch` shows the repository's checkpoint; with `context` it
+  shows any other; with neither it lists the most recent ones.
 - A checkpoint is a claim about the past. Compare its commit with HEAD (`git log`) before
   relying on it. The session-start hook prints the HEAD commit.
 

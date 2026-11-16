@@ -1,13 +1,16 @@
 // The operations behind the MCP tools. Each returns the text a model reads
 // and throws SatchelError for caller mistakes.
 import {
-  BRANCH_MAX_CHARS,
+  ABOUT_PATTERN,
   BRIEF_LOADED_MAX_CHARS,
+  CONTEXT_MAX_CHARS,
+  DEFAULT_THREAD,
   FILETYPE_PATTERN,
-  PROJECT_MAX_CHARS,
   RECALL_DEFAULT_LIMIT,
   RECALL_PAGE_MAX_CHARS,
+  RECENT_CHECKPOINTS_MAX,
   TAG_PATTERN,
+  THREAD_MAX_CHARS,
 } from '../config.ts'
 import { type Memory, SatchelError, type Store } from '../types.ts'
 import { pageOf } from './paging.ts'
@@ -53,9 +56,34 @@ const SCOPE_REQUIREMENTS = {
   host: (args: ScopedArgs) => (args.host ? undefined : 'scope "host" needs `host`.'),
 } satisfies Record<NonNullable<ScopedArgs['scope']>, (args: ScopedArgs) => string | undefined>
 
-function assertScopeFields(args: ScopedArgs): void {
+/** For a new memory the scope fields must arrive together; a patch is checked once merged. */
+function assertScopeFields(args: ScopedArgs & { replaces?: string }): void {
+  if (args.replaces !== undefined) return
   const problem = SCOPE_REQUIREMENTS[args.scope ?? 'global'](args)
   if (problem) throw new SatchelError('invalid', problem)
+}
+
+function assertNewMemoryFields(args: MemorizeArgs): void {
+  if (args.replaces !== undefined) return
+  if (args.text === undefined || args.topic === undefined) {
+    throw new SatchelError(
+      'invalid',
+      'A new memory needs `text` and `topic`; give `replaces` to update an existing one.',
+    )
+  }
+}
+
+function assertNewReferenceFields(args: SaveReferenceArgs): void {
+  if (args.replaces !== undefined) return
+  const missing = ['title', 'description', 'content', 'topic'].filter(
+    (field) => args[field as keyof SaveReferenceArgs] === undefined,
+  )
+  if (missing.length > 0) {
+    throw new SatchelError(
+      'invalid',
+      `A new reference needs ${missing.map((field) => `\`${field}\``).join(', ')}; give \`replaces\` to update an existing one.`,
+    )
+  }
 }
 
 function similarSection(newId: string, similar: Memory[]): string[] {
@@ -75,24 +103,23 @@ const REQUEST_LABEL_RULES = {
     pattern: FILETYPE_PATTERN,
   },
   tags: { normalise: (value: string) => value.trim().toLowerCase(), pattern: TAG_PATTERN },
+  about: { normalise: (value: string) => value.trim().toLowerCase(), pattern: ABOUT_PATTERN },
 }
 
 function requestLabels(
   kind: keyof typeof REQUEST_LABEL_RULES,
   values: string[] | undefined,
 ): string[] | undefined {
+  if (values === undefined) return undefined
   const rule = REQUEST_LABEL_RULES[kind]
-  const labels = [...new Set((values ?? []).map(rule.normalise))].filter((value) =>
-    rule.pattern.test(value),
-  )
-  return labels.length === 0 ? undefined : labels
+  return [...new Set(values.map(rule.normalise))].filter((value) => rule.pattern.test(value))
 }
 
 function workLabels(args: { filetypes?: string[]; tags?: string[] }): WorkLabels | undefined {
   const filetypes = requestLabels('filetypes', args.filetypes)
   const tags = requestLabels('tags', args.tags)
-  if (filetypes === undefined && tags === undefined) return undefined
-  return { ...(filetypes ? { filetypes } : {}), ...(tags ? { tags } : {}) }
+  if (!filetypes?.length && !tags?.length) return undefined
+  return { ...(filetypes?.length ? { filetypes } : {}), ...(tags?.length ? { tags } : {}) }
 }
 
 /** Size of a memory as recall prints it, newline included. */
@@ -100,8 +127,16 @@ function renderedSize(memory: Memory): number {
   return renderMemory(memory).length + 1
 }
 
-function branchLabel(project: string, branch: string): string {
-  return `${flattenLine(project, PROJECT_MAX_CHARS)} @ ${flattenLine(branch, BRANCH_MAX_CHARS)}`
+function requireContext(args: CheckpointArgs): string {
+  if (args.context !== undefined) return args.context
+  throw new SatchelError(
+    'invalid',
+    'checkpoint needs `context`: in a repository the id `brief` takes as `project` (host/owner/repo), with the branch as `thread`; outside one, a short name for the undertaking, e.g. "grant-proposal".',
+  )
+}
+
+function threadLabel(context: string, thread: string): string {
+  return `${flattenLine(context, CONTEXT_MAX_CHARS)} @ ${flattenLine(thread, THREAD_MAX_CHARS)}`
 }
 
 export function createSatchelService(options: { store: Store }): SatchelService {
@@ -129,37 +164,45 @@ export function createSatchelService(options: { store: Store }): SatchelService 
   }
 
   async function brief(args: BriefArgs, client: string): Promise<string> {
-    const [core, topics, hosts, labels, loaded] = await Promise.all([
-      store.core(),
-      store.topics(),
-      store.hosts(),
-      store.labels(),
-      loadedForWork(args, client),
-    ])
-    const general = { core, topics, hosts, host: args.host, labels, loaded }
-    if (args.project === undefined) {
-      return renderBrief({ ...general, checkpoints: [], projectMemoryCount: 0 })
-    }
-    const [checkpoints, projectMemoryCount] = await Promise.all([
-      store.checkpoints(args.project, args.branch),
-      store.projectMemoryCount(args.project),
-    ])
+    const context = args.context ?? args.project
+    const thread = args.thread ?? args.branch
+    const [core, topics, hosts, labels, loaded, checkpoints, recent, projectMemoryCount] =
+      await Promise.all([
+        store.core(),
+        store.topics(),
+        store.hosts(),
+        store.labels(),
+        loadedForWork(args, client),
+        context === undefined ? [] : store.checkpoints(context, thread),
+        context === undefined ? store.recentCheckpoints(RECENT_CHECKPOINTS_MAX) : [],
+        args.project === undefined ? 0 : store.projectMemoryCount(args.project),
+      ])
     return renderBrief({
-      ...general,
+      core,
+      topics,
+      hosts,
+      host: args.host,
+      labels,
+      loaded,
       project: args.project,
-      branch: args.branch,
+      context,
+      thread,
       checkpoints,
+      recent,
       projectMemoryCount,
     })
   }
 
   async function recall(args: RecallArgs, client: string): Promise<string> {
     const work = workLabels(args)
-    const asked = [args.query, args.topic, args.host, work].some((value) => value !== undefined)
+    const about = requestLabels('about', args.about)
+    const asked = [args.query, args.topic, args.host, work, about].some(
+      (value) => value !== undefined,
+    )
     if (!asked) {
       throw new SatchelError(
         'invalid',
-        'Give `query`, `topic`, `host`, `filetypes` or `tags` (or a combination).',
+        'Give `query`, `topic`, `host`, `filetypes`, `tags` or `about` (or a combination).',
       )
     }
     const request = {
@@ -167,7 +210,9 @@ export function createSatchelService(options: { store: Store }): SatchelService 
       topic: args.topic,
       project: args.project,
       host: args.host,
+      kind: args.kind,
       ...work,
+      ...(about === undefined ? {} : { about }),
     }
     const [memories, references] = await Promise.all([
       store.recall(request),
@@ -191,6 +236,7 @@ export function createSatchelService(options: { store: Store }): SatchelService 
   }
 
   async function saveReference(args: SaveReferenceArgs, client: string): Promise<string> {
+    assertNewReferenceFields(args)
     assertScopeFields(args)
     const reference = await store.saveReference({
       title: args.title,
@@ -198,17 +244,19 @@ export function createSatchelService(options: { store: Store }): SatchelService 
       content: args.content,
       format: args.format,
       topic: args.topic,
-      scope: args.scope ?? 'global',
+      scope: args.scope,
       project: args.project,
       host: args.host,
       filetypes: args.filetypes,
       tags: args.tags,
+      about: args.about,
+      expires: args.expires,
       topicTrigger: args.topic_trigger,
       replaces: args.replaces,
       source: client,
     })
     const verb = args.replaces ? 'Updated' : 'Saved'
-    return `${verb} reference (${reference.content.length} characters):\n${renderReferenceLine(reference)}`
+    return `${verb} reference (content ${reference.content.length} characters):\n${renderReferenceLine(reference)}`
   }
 
   async function read(args: ReadArgs, client: string): Promise<string> {
@@ -219,11 +267,17 @@ export function createSatchelService(options: { store: Store }): SatchelService 
   }
 
   async function memorize(args: MemorizeArgs, client: string): Promise<string> {
+    assertNewMemoryFields(args)
     assertScopeFields(args)
     const { memory, similar } = await store.memorize({
       text: args.text,
       topic: args.topic,
-      scope: args.scope ?? 'global',
+      kind: args.kind,
+      origin: args.origin,
+      date: args.date,
+      expires: args.expires,
+      about: args.about,
+      scope: args.scope,
       project: args.project,
       host: args.host,
       filetypes: args.filetypes,
@@ -242,18 +296,22 @@ export function createSatchelService(options: { store: Store }): SatchelService 
   }
 
   async function checkpoint(args: CheckpointArgs, client: string): Promise<string> {
+    const context = requireContext(args)
+    const thread = args.thread ?? DEFAULT_THREAD
     if (args.done) {
-      await store.dropCheckpoint(args.project, args.branch, client)
-      return `Checkpoint for ${branchLabel(args.project, args.branch)} removed.`
+      await store.dropCheckpoint(context, thread, client)
+      return `Checkpoint for ${threadLabel(context, thread)} removed.`
     }
     const saved = await store.checkpoint({
-      project: args.project,
-      branch: args.branch,
+      context,
+      thread,
       commit: args.commit,
       summary: args.summary,
       source: client,
     })
-    return `Checkpoint ${saved.id} saved for ${branchLabel(saved.project, saved.branch)} at ${checkpointCommit(saved)}.`
+    const at = saved.commit === undefined ? '' : ` at ${checkpointCommit(saved)}`
+    const kept = args.summary === undefined && saved.summary !== '' ? ' (stored summary kept)' : ''
+    return `Checkpoint ${saved.id} saved for ${threadLabel(saved.context, saved.thread)}${at}${kept}.`
   }
 
   return { brief, recall, memorize, saveReference, read, forget, checkpoint }

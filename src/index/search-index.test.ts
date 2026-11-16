@@ -9,6 +9,8 @@ function memory(id: string, text: string, extra: Partial<Memory> = {}): Memory {
   return {
     id,
     topic: 'general',
+    kind: 'fact',
+    origin: 'inferred',
     scope: 'global',
     created: '2026-01-01T00:00:00Z',
     updated: '2026-01-01T00:00:00Z',
@@ -188,5 +190,76 @@ describe('search index', () => {
       { kind: 'tag', value: 'code', count: 1 },
       { kind: 'tag', value: 'rxjs', count: 1 },
     ])
+  })
+  it('filters by any shared about entity and by kind, and counts about values', () => {
+    const index = create()
+    add(
+      index,
+      memory('m_aaaaaaaa', 'alice likes tea', { kind: 'preference', about: ['person:alice'] }),
+    )
+    add(
+      index,
+      memory('m_bbbbbbbb', 'alice met bob', {
+        kind: 'event',
+        date: '2026-03-01',
+        about: ['person:alice', 'person:bob'],
+      }),
+    )
+    add(index, memory('m_cccccccc', 'carol', { about: ['person:carol'] }))
+    add(index, memory('m_dddddddd', 'nobody', { tags: ['code'] }))
+    const ids = (input: Parameters<SearchIndex['search']>[0]) =>
+      index.search(input).map((m) => m.id)
+    expect(ids({ about: ['person:alice'] })).toEqual(['m_aaaaaaaa', 'm_bbbbbbbb'])
+    expect(ids({ about: ['person:bob', 'person:carol'] })).toEqual(['m_bbbbbbbb', 'm_cccccccc'])
+    expect(ids({ about: ['person:alice'], kind: 'event' })).toEqual(['m_bbbbbbbb'])
+    expect(ids({ about: [] })).toEqual([])
+    expect(ids({ query: 'alice', about: ['person:bob'], limit: 10 })).toEqual(['m_bbbbbbbb'])
+    // About never counts as a work label: this memory has no filetypes or tags to match.
+    expect(ids({ tags: ['code'] })).toEqual(['m_dddddddd'])
+    expect(index.labelCounts().filter((entry) => entry.kind === 'about')).toEqual([
+      { kind: 'about', value: 'person:alice', count: 2 },
+      { kind: 'about', value: 'person:bob', count: 1 },
+      { kind: 'about', value: 'person:carol', count: 1 },
+    ])
+    expect(index.getMemory('m_bbbbbbbb')).toMatchObject({ kind: 'event', date: '2026-03-01' })
+  })
+
+  it('hides expired memories everywhere except getMemory', () => {
+    const clock = { now: new Date('2026-06-01T12:00:00Z') }
+    const index = createSearchIndex({ path: dbPath(), now: () => clock.now })
+    open.push(index)
+    add(index, memory('m_aaaaaaaa', 'kettle still valid', { expires: '2026-07-01' }))
+    add(index, memory('m_bbbbbbbb', 'kettle expired', { expires: '2026-05-01', tags: ['code'] }))
+    add(index, memory('m_cccccccc', 'kettle expires today', { expires: '2026-06-01T12:00:00Z' }))
+    const ids = (input: Parameters<SearchIndex['search']>[0]) =>
+      index.search(input).map((m) => m.id)
+    expect(ids({ query: 'kettle', limit: 10 })).toEqual(['m_aaaaaaaa'])
+    expect(ids({ topic: 'general' })).toEqual(['m_aaaaaaaa'])
+    expect(ids({ tags: ['code'] })).toEqual([])
+    expect(index.topicCounts().get('general')).toBe(1)
+    expect(index.labelCounts()).toEqual([])
+    expect(index.getMemory('m_bbbbbbbb')?.expires).toBe('2026-05-01')
+    clock.now = new Date('2026-08-01T00:00:00Z')
+    expect(ids({ topic: 'general' })).toEqual([])
+  })
+
+  it('keeps one checkpoint per context and thread and lists the most recent', () => {
+    const index = create()
+    const checkpoint = (id: string, context: string, thread: string, updated: string) =>
+      index.upsertCheckpoint({
+        path: `checkpoints/${id}.md`,
+        hash: id,
+        checkpoint: { id, context, thread, updated, source: 't', summary: id },
+      })
+    checkpoint('c_aaaaaaaa', 'repo', 'main', '2026-01-01T00:00:00Z')
+    checkpoint('c_bbbbbbbb', 'grant', 'main', '2026-03-01T00:00:00Z')
+    checkpoint('c_cccccccc', 'repo', 'dev', '2026-02-01T00:00:00Z')
+    expect(index.findCheckpoint('grant', 'main')).toMatchObject({ id: 'c_bbbbbbbb' })
+    expect(index.findCheckpoint('grant', 'main')?.commit).toBeUndefined()
+    expect(index.listCheckpoints('repo').map((c) => c.id)).toEqual(['c_cccccccc', 'c_aaaaaaaa'])
+    expect(index.recentCheckpoints(2).map((c) => c.id)).toEqual(['c_bbbbbbbb', 'c_cccccccc'])
+    expect(() => checkpoint('c_dddddddd', 'repo', 'main', '2026-04-01T00:00:00Z')).toThrow(
+      /already exists/,
+    )
   })
 })

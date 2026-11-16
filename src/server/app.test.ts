@@ -23,6 +23,8 @@ const silentLog: typeof log = {
 
 function memory(overrides: Partial<Memory> & Pick<Memory, 'id' | 'topic' | 'text'>): Memory {
   return {
+    kind: 'fact',
+    origin: 'inferred',
     scope: 'global',
     created: '2026-11-01T10:00:00Z',
     updated: '2026-11-01T10:00:00Z',
@@ -50,8 +52,8 @@ const SEED: FakeStoreSeed = {
   checkpoints: [
     {
       id: 'c_cccccccc',
-      project: 'github.com/me/app',
-      branch: 'main',
+      context: 'github.com/me/app',
+      thread: 'main',
       commit: '3f2a9c1',
       updated: '2026-11-12T18:04:00Z',
       source: 'claude-code',
@@ -249,8 +251,8 @@ describe('MCP over Streamable HTTP', () => {
     const saved = await client().callTool({
       name: 'checkpoint',
       arguments: {
-        project: 'github.com/me/app',
-        branch: 'feat',
+        context: 'github.com/me/app',
+        thread: 'feat',
         commit: 'abc1234',
         summary: 'WIP',
       },
@@ -260,10 +262,139 @@ describe('MCP over Streamable HTTP', () => {
     expect(stored[0]?.source).toBe('test-client')
     const done = await client().callTool({
       name: 'checkpoint',
-      arguments: { project: 'github.com/me/app', branch: 'feat', commit: 'abc1234', done: true },
+      arguments: { context: 'github.com/me/app', thread: 'feat', commit: 'abc1234', done: true },
     })
     expect(textOf(done)).toContain('removed')
     expect(await harness().store.checkpoints('github.com/me/app', 'feat')).toEqual([])
+  })
+
+  it('checkpoints a thread outside any repository and briefs it by context', async () => {
+    const saved = await client().callTool({
+      name: 'checkpoint',
+      arguments: { context: 'grant-proposal', summary: 'Budget section drafted.' },
+    })
+    expect(textOf(saved)).toMatch(/saved for grant-proposal @ main\.$/)
+    const brief = textOf(
+      await client().callTool({ name: 'brief', arguments: { context: 'grant-proposal' } }),
+    )
+    expect(brief).toContain('## Context grant-proposal')
+    expect(brief).toContain('summary: Budget section drafted.')
+    expect(brief).not.toMatch(/^commit:/m)
+    const recent = textOf(await client().callTool({ name: 'brief', arguments: {} }))
+    expect(recent).toContain('## Recent checkpoints')
+    expect(recent).toContain('- grant-proposal @ main (2026-11-12): Budget section drafted.')
+    await client().callTool({
+      name: 'checkpoint',
+      arguments: { context: 'grant-proposal', done: true },
+    })
+  })
+
+  it('checkpoint without context says what to pass, and a hash-only call keeps the summary', async () => {
+    const missing = await client().callTool({
+      name: 'checkpoint',
+      arguments: { project: 'github.com/me/app', branch: 'main', commit: 'abc1234' },
+    })
+    expect(isError(missing)).toBe(true)
+    expect(textOf(missing)).toContain('needs `context`')
+    expect(textOf(missing)).toContain('`brief` takes as `project`')
+    const kept = await client().callTool({
+      name: 'checkpoint',
+      arguments: { context: 'github.com/me/app', thread: 'main', commit: 'abc1234' },
+    })
+    expect(textOf(kept)).toBe(
+      'Checkpoint c_cccccccc saved for github.com/me/app @ main at abc1234 (stored summary kept).',
+    )
+    await client().callTool({
+      name: 'checkpoint',
+      arguments: { context: 'github.com/me/app', thread: 'main', commit: '3f2a9c1' },
+    })
+  })
+
+  it('memorize with replaces patches: fields left out keep their stored values', async () => {
+    const saved = textOf(
+      await client().callTool({
+        name: 'memorize',
+        arguments: {
+          text: 'Alice prefers window seats.',
+          topic: 'svelte',
+          kind: 'preference',
+          origin: 'stated',
+          about: ['person:alice'],
+          tags: ['travel'],
+        },
+      }),
+    )
+    const id = saved.match(/m_\w{8}/)?.[0] ?? ''
+    const patched = await client().callTool({
+      name: 'memorize',
+      arguments: { replaces: id, expires: '2027-01-01' },
+    })
+    expect(isError(patched)).toBe(false)
+    expect(textOf(patched)).toMatch(/^Updated:\n/)
+    expect(harness().store.memories.get(id)).toMatchObject({
+      text: 'Alice prefers window seats.',
+      kind: 'preference',
+      origin: 'stated',
+      about: ['person:alice'],
+      tags: ['travel'],
+      expires: '2027-01-01',
+    })
+    const cleared = await client().callTool({
+      name: 'memorize',
+      arguments: { replaces: id, tags: [], expires: null },
+    })
+    expect(isError(cleared)).toBe(false)
+    const memory = harness().store.memories.get(id)
+    expect(memory?.tags).toBeUndefined()
+    expect(memory?.expires).toBeUndefined()
+    expect(memory?.about).toEqual(['person:alice'])
+  })
+
+  it('memorize without replaces needs text and topic', async () => {
+    const result = await client().callTool({
+      name: 'memorize',
+      arguments: { kind: 'preference' },
+    })
+    expect(isError(result)).toBe(true)
+    expect(textOf(result)).toContain('needs `text` and `topic`')
+  })
+
+  it('an event needs a date', async () => {
+    const result = await client().callTool({
+      name: 'memorize',
+      arguments: { text: 'Dentist appointment.', topic: 'svelte', kind: 'event' },
+    })
+    expect(isError(result)).toBe(true)
+    expect(textOf(result)).toContain('needs `date`')
+  })
+
+  it('recall lists by about and narrows by kind', async () => {
+    await client().callTool({
+      name: 'memorize',
+      arguments: {
+        text: 'Alice moved to Lisbon.',
+        topic: 'svelte',
+        kind: 'event',
+        date: '2026-10-01',
+        about: ['person:alice', 'place:lisbon'],
+      },
+    })
+    const listed = textOf(
+      await client().callTool({ name: 'recall', arguments: { about: ['person:alice'] } }),
+    )
+    expect(listed).toContain('Alice moved to Lisbon.')
+    expect(listed).toContain('Alice prefers window seats.')
+    expect(listed).toContain('| event | date: 2026-10-01 |')
+    const events = textOf(
+      await client().callTool({
+        name: 'recall',
+        arguments: { about: ['person:alice'], kind: 'event' },
+      }),
+    )
+    expect(events).toContain('Alice moved to Lisbon.')
+    expect(events).not.toContain('window seats')
+    const brief = textOf(await client().callTool({ name: 'brief', arguments: {} }))
+    expect(brief).toMatch(/^About: person:alice \(2\), place:lisbon \(1\)$/m)
   })
 
   it('forget deletes and reports not_found as isError', async () => {

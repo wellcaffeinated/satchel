@@ -34,6 +34,7 @@ import {
 import { type ScannedFile, scanRepo } from './repo-scan.ts'
 import { createRepoWatcher } from './repo-watcher.ts'
 import { safePathSegment, slugifyBody } from './slug.ts'
+import { formatTimestamp } from './time.ts'
 import { createTopicsFile } from './topics-file.ts'
 import {
   cleanClientName,
@@ -45,7 +46,6 @@ import { createWriteQueue } from './write-queue.ts'
 
 const WATCH_DEBOUNCE_MS = 200
 const SIMILAR_LIMIT = 3
-const TIMESTAMP_MILLIS = /\.\d{3}Z$/
 
 export interface StoreOptions {
   dataDir: string
@@ -66,17 +66,35 @@ export interface SatchelStore extends Store {
   readonly indexPath: string
 }
 
-function formatTimestamp(date: Date): string {
-  return date.toISOString().replace(TIMESTAMP_MILLIS, 'Z')
-}
-
 function undefinedIfEmpty(value: string | undefined): string | undefined {
   const trimmed = value?.trim()
   return trimmed ? trimmed : undefined
 }
 
-function checkpointPath(project: string, branch: string): string {
-  return `checkpoints/${safePathSegment(project)}/${safePathSegment(branch)}.md`
+function checkpointPath(context: string, thread: string): string {
+  return `checkpoints/${safePathSegment(context)}/${safePathSegment(thread)}.md`
+}
+
+/** A recall request as the index takes it: trimmed names, and what "nothing asked" means. */
+function searchRequest(input: RecallInput) {
+  const query = undefinedIfEmpty(input.query)
+  const topic = undefinedIfEmpty(input.topic)
+  const host = undefinedIfEmpty(input.host)
+  const { filetypes, tags, about, kind } = input
+  const labelled = filetypes !== undefined || tags !== undefined || about !== undefined
+  return {
+    query,
+    topic,
+    project: undefinedIfEmpty(input.project),
+    host,
+    // A host on its own asks what is known about that machine, not for everything.
+    hostScopedOnly: query === undefined && topic === undefined && !labelled,
+    filetypes,
+    tags,
+    about,
+    kind,
+    asked: query !== undefined || topic !== undefined || host !== undefined || labelled,
+  }
 }
 
 export async function createStore(options: StoreOptions): Promise<SatchelStore> {
@@ -93,7 +111,7 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
   const repo = createGitRepo({ dir: repoDir })
   await repo.ensureInitialised()
 
-  const index: SearchIndex = createSearchIndex({ path: indexPath })
+  const index: SearchIndex = createSearchIndex({ path: indexPath, now })
   const queue = createWriteQueue()
   const topicsFile = createTopicsFile({ path: join(repoDir, 'topics.yaml') })
   const loader =
@@ -207,44 +225,21 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
   }
 
   async function recall(input: RecallInput): Promise<Memory[]> {
-    const query = undefinedIfEmpty(input.query)
-    const topic = undefinedIfEmpty(input.topic)
-    const host = undefinedIfEmpty(input.host)
-    const { filetypes, tags } = input
-    const labelled = filetypes !== undefined || tags !== undefined
-    if (query === undefined && topic === undefined && host === undefined && !labelled) {
-      throw new SatchelError('invalid', 'recall needs a query, a topic, a host, filetypes or tags.')
+    const { asked, ...request } = searchRequest(input)
+    if (!asked) {
+      throw new SatchelError(
+        'invalid',
+        'recall needs a query, a topic, a host, filetypes, tags or about.',
+      )
     }
-    const queryVector = query === undefined ? undefined : await worker.queryVector(query)
-    return index.search({
-      query,
-      topic,
-      project: undefinedIfEmpty(input.project),
-      host,
-      // A host on its own asks what is known about that machine, not for everything.
-      hostScopedOnly: query === undefined && topic === undefined && !labelled,
-      filetypes,
-      tags,
-      queryVector,
-    })
+    const queryVector =
+      request.query === undefined ? undefined : await worker.queryVector(request.query)
+    return index.search({ ...request, queryVector })
   }
 
   async function findReferences(input: RecallInput): Promise<ReferenceSummary[]> {
-    const query = undefinedIfEmpty(input.query)
-    const topic = undefinedIfEmpty(input.topic)
-    const host = undefinedIfEmpty(input.host)
-    const { filetypes, tags } = input
-    const labelled = filetypes !== undefined || tags !== undefined
-    return index.findReferences({
-      query,
-      topic,
-      project: undefinedIfEmpty(input.project),
-      host,
-      hostScopedOnly: query === undefined && topic === undefined && !labelled,
-      filetypes,
-      tags,
-      limit: REFERENCES_LISTED_MAX,
-    })
+    const { asked: _asked, kind: _kind, ...request } = searchRequest(input)
+    return index.findReferences({ ...request, limit: REFERENCES_LISTED_MAX })
   }
 
   async function read(id: string) {
@@ -266,7 +261,7 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
       counts
         .filter((entry) => entry.kind === kind)
         .map((entry) => ({ value: entry.value, count: entry.count }))
-    return { filetypes: ofKind('filetype'), tags: ofKind('tag') }
+    return { filetypes: ofKind('filetype'), tags: ofKind('tag'), about: ofKind('about') }
   }
 
   // ---- writes ---------------------------------------------------------------------------
@@ -287,9 +282,9 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
   }
 
   async function memorizeLocked(input: MemorizeInput): Promise<MemorizeResult> {
-    const fields = validateMemorize(input)
-    const source = cleanClientName(input.source)
     const replaced = input.replaces === undefined ? undefined : requireMemory(input.replaces)
+    const fields = validateMemorize(input, replaced)
+    const source = cleanClientName(input.source)
     const knownTopics = await topicsFile.read()
     const createsTopic = !knownTopics.has(fields.topic)
     if (createsTopic && fields.topicTrigger === undefined)
@@ -300,11 +295,16 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
     const memory: Memory = {
       id,
       topic: fields.topic,
+      kind: fields.kind,
+      origin: fields.origin,
+      ...(fields.date === undefined ? {} : { date: fields.date }),
+      ...(fields.expires === undefined ? {} : { expires: fields.expires }),
       scope: fields.scope,
       ...(fields.project === undefined ? {} : { project: fields.project }),
       ...(fields.host === undefined ? {} : { host: fields.host }),
       ...(fields.filetypes === undefined ? {} : { filetypes: fields.filetypes }),
       ...(fields.tags === undefined ? {} : { tags: fields.tags }),
+      ...(fields.about === undefined ? {} : { about: fields.about }),
       created: replaced?.created ?? timestamp,
       updated: timestamp,
       source,
@@ -373,9 +373,9 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
   }
 
   async function saveReferenceLocked(input: SaveReferenceInput): Promise<Reference> {
-    const fields = validateReference(input)
-    const source = cleanClientName(input.source)
     const replaced = input.replaces === undefined ? undefined : requireReference(input.replaces)
+    const fields = validateReference(input, replaced)
+    const source = cleanClientName(input.source)
     const topicPaths = await ensureTopic(fields.topic, fields.topicTrigger)
     const timestamp = formatTimestamp(now())
     const id = replaced?.id ?? newId('r')
@@ -389,6 +389,8 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
       ...(fields.host === undefined ? {} : { host: fields.host }),
       ...(fields.filetypes === undefined ? {} : { filetypes: fields.filetypes }),
       ...(fields.tags === undefined ? {} : { tags: fields.tags }),
+      ...(fields.about === undefined ? {} : { about: fields.about }),
+      ...(fields.expires === undefined ? {} : { expires: fields.expires }),
       format: fields.format,
       created: replaced?.created ?? timestamp,
       updated: timestamp,
@@ -427,31 +429,32 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
   async function checkpointLocked(input: CheckpointInput): Promise<Checkpoint> {
     const fields = validateCheckpoint(input)
     const source = cleanClientName(input.source)
-    const existing = index.findCheckpoint(fields.project, fields.branch)
+    const existing = index.findCheckpoint(fields.context, fields.thread)
+    const commit = undefinedIfEmpty(fields.commit ?? existing?.commit)
     const checkpoint: Checkpoint = {
       id: existing?.id ?? newId('c'),
-      project: fields.project,
-      branch: fields.branch,
-      commit: fields.commit,
+      context: fields.context,
+      thread: fields.thread,
+      ...(commit === undefined ? {} : { commit }),
       updated: formatTimestamp(now()),
       source,
       summary: fields.summary ?? existing?.summary ?? '',
     }
     const path =
       (existing ? index.pathOfId(existing.id) : undefined) ??
-      checkpointPath(fields.project, fields.branch)
+      checkpointPath(fields.context, fields.thread)
     const content = renderCheckpoint(checkpoint)
     await writeRepoFile(path, content)
     index.upsertCheckpoint({ path, hash: hashContent(content), checkpoint })
     await repo.commit({
       paths: [path],
-      message: commitMessage('checkpoint', `${fields.project} @ ${fields.branch}`, source),
+      message: commitMessage('checkpoint', `${fields.context} @ ${fields.thread}`, source),
     })
     return checkpoint
   }
 
-  async function dropCheckpointLocked(project: string, branch: string, rawSource: string) {
-    const existing = index.findCheckpoint(project, branch)
+  async function dropCheckpointLocked(context: string, thread: string, rawSource: string) {
+    const existing = index.findCheckpoint(context, thread)
     if (!existing) return
     await forgetLocked(existing.id, rawSource)
   }
@@ -489,9 +492,10 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
     memorize: (input) => queue.run(() => memorizeLocked(input)),
     forget: (id, source) => queue.run(() => forgetLocked(id, source)),
     checkpoint: (input) => queue.run(() => checkpointLocked(input)),
-    dropCheckpoint: (project, branch, source) =>
-      queue.run(() => dropCheckpointLocked(project, branch, source)),
-    checkpoints: async (project, branch) => index.listCheckpoints(project, branch),
+    dropCheckpoint: (context, thread, source) =>
+      queue.run(() => dropCheckpointLocked(context, thread, source)),
+    checkpoints: async (context, thread) => index.listCheckpoints(context, thread),
+    recentCheckpoints: async (limit) => index.recentCheckpoints(limit),
     projectMemoryCount: async (project) => index.projectMemoryCount(project),
     hosts,
     sync,

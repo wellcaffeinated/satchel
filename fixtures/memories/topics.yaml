@@ -18,3 +18,5 @@ writing:
   trigger: read before writing docs, commit messages or other prose for the user
 python:
   trigger: read before Python work or packaging
+household:
+  trigger: read before planning anything about the house, the garden or the people in it

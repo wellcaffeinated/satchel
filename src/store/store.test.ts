@@ -267,6 +267,136 @@ describe('store', () => {
       })
     })
 
+    it('patches with replaces: fields left out keep their values, [] and null clear', async () => {
+      const store = await open()
+      const first = await memorize(store, 'Alice prefers window seats.', {
+        kind: 'preference',
+        origin: 'stated',
+        scope: 'project',
+        project: 'github.com/o/r',
+        tags: ['travel'],
+        about: ['person:alice'],
+        expires: '2027-01-01',
+      })
+      const patched = await store.memorize({
+        replaces: first.memory.id,
+        text: 'Alice prefers aisle seats.',
+        source: 'c',
+      })
+      expect(patched.memory).toMatchObject({
+        text: 'Alice prefers aisle seats.',
+        kind: 'preference',
+        origin: 'stated',
+        scope: 'project',
+        project: 'github.com/o/r',
+        tags: ['travel'],
+        about: ['person:alice'],
+        expires: '2027-01-01',
+        source: 'c',
+      })
+      const cleared = await store.memorize({
+        replaces: first.memory.id,
+        tags: [],
+        expires: null,
+        scope: 'global',
+        source: 'c',
+      })
+      expect(cleared.memory.tags).toBeUndefined()
+      expect(cleared.memory.expires).toBeUndefined()
+      expect(cleared.memory.project).toBeUndefined()
+      expect(cleared.memory).toMatchObject({ scope: 'global', about: ['person:alice'] })
+      const raw = readFileSync(
+        join(
+          repoDir(),
+          'memories',
+          'general',
+          readdirSync(join(repoDir(), 'memories', 'general'))[0] ?? '',
+        ),
+        'utf8',
+      )
+      expect(raw).toContain('kind: preference')
+      expect(raw).toContain('origin: stated')
+      expect(raw).not.toContain('expires')
+      await expect(
+        store.memorize({ replaces: first.memory.id, scope: 'host', source: 'c' }),
+      ).rejects.toMatchObject({ code: 'invalid' })
+    })
+
+    it('needs text and topic for a new memory, and a date for an event', async () => {
+      const store = await open()
+      await expect(store.memorize({ text: 'x', source: 'c' })).rejects.toMatchObject({
+        code: 'invalid',
+      })
+      await expect(memorize(store, 'Dentist.', { kind: 'event' })).rejects.toMatchObject({
+        code: 'invalid',
+      })
+      await expect(
+        memorize(store, 'Dentist.', { kind: 'event', date: 'soon' }),
+      ).rejects.toMatchObject({
+        code: 'invalid',
+      })
+      const { memory } = await memorize(store, 'Dentist.', {
+        kind: 'event',
+        date: '2026-12-03',
+        about: ['Person:Alice', 'person:alice'],
+      })
+      expect(memory).toMatchObject({ kind: 'event', date: '2026-12-03', about: ['person:alice'] })
+      await expect(memorize(store, 'x', { origin: 'guessed' })).rejects.toMatchObject({
+        code: 'invalid',
+      })
+    })
+
+    it('hides expired memories from recall, counts and similar, but reads them by id', async () => {
+      const store = await open({ now: () => new Date('2026-06-01T00:00:00Z') })
+      const live = await memorize(store, 'The pool is open this summer.', { expires: '2026-09-01' })
+      const gone = await memorize(store, 'The pool is open this spring.', { expires: '2026-05-01' })
+      expect((await store.recall({ topic: 'general' })).map((m) => m.id)).toEqual([live.memory.id])
+      expect((await store.recall({ query: 'pool open' })).map((m) => m.id)).toEqual([
+        live.memory.id,
+      ])
+      expect((await store.topics())[0]?.count).toBe(1)
+      const read = await store.read(gone.memory.id)
+      expect(read.kind === 'memory' && read.memory.expires).toBe('2026-05-01')
+      const again = await memorize(store, 'The pool is open this spring.')
+      expect(again.similar.map((m) => m.id)).toEqual([live.memory.id])
+    })
+
+    it('finds memories and references by what they are about', async () => {
+      const store = await open()
+      const alice = await memorize(store, 'Alice runs the garden committee.', {
+        about: ['person:alice'],
+      })
+      await memorize(store, 'Bob keeps bees.', { about: ['person:bob'] })
+      const reference = await store.saveReference({
+        title: 'Garden plan',
+        description: 'Planting plan for the shared garden',
+        content: 'beds: 4',
+        topic: 'general',
+        about: ['person:alice', 'project:garden'],
+        source: 'c',
+      })
+      expect((await store.recall({ about: ['person:alice'] })).map((m) => m.id)).toEqual([
+        alice.memory.id,
+      ])
+      expect((await store.findReferences({ about: ['project:garden'] })).map((r) => r.id)).toEqual([
+        reference.id,
+      ])
+      expect((await store.labels()).about).toEqual([
+        { value: 'person:alice', count: 1 },
+        { value: 'person:bob', count: 1 },
+      ])
+      const patched = await store.saveReference({
+        replaces: reference.id,
+        description: 'Planting plan, revised',
+        source: 'c',
+      })
+      expect(patched).toMatchObject({
+        title: 'Garden plan',
+        content: 'beds: 4',
+        about: ['person:alice', 'project:garden'],
+      })
+    })
+
     it('moves the file when a replace changes topic', async () => {
       const store = await open()
       const first = await memorize(store, 'A movable fact.', { topic: 'one' })
@@ -379,7 +509,7 @@ describe('store', () => {
     it('forgets memories and checkpoints, and errors on unknown ids', async () => {
       const store = await open()
       const { memory } = await memorize(store, 'Temporary fact.')
-      const cp = await store.checkpoint({ project: 'p', branch: 'b', commit: 'abc', source: 'c' })
+      const cp = await store.checkpoint({ context: 'p', thread: 'b', commit: 'abc', source: 'c' })
       await store.forget(memory.id, 'c')
       await store.forget(cp.id, 'c')
       expect(await store.recall({ topic: 'general' })).toEqual([])
@@ -402,15 +532,15 @@ describe('store', () => {
     it('upserts per project and branch and keeps the summary when undefined', async () => {
       const store = await open()
       const first = await store.checkpoint({
-        project: 'github.com/o/r',
-        branch: 'main',
+        context: 'github.com/o/r',
+        thread: 'main',
         commit: 'aaa1111',
         summary: 'Did the store.',
         source: 'c',
       })
       const second = await store.checkpoint({
-        project: 'github.com/o/r',
-        branch: 'main',
+        context: 'github.com/o/r',
+        thread: 'main',
         commit: 'bbb2222',
         source: 'c',
       })
@@ -418,16 +548,16 @@ describe('store', () => {
       expect(second.commit).toBe('bbb2222')
       expect(second.summary).toBe('Did the store.')
       const third = await store.checkpoint({
-        project: 'github.com/o/r',
-        branch: 'main',
+        context: 'github.com/o/r',
+        thread: 'main',
         commit: 'ccc3333',
         summary: 'Rewritten.',
         source: 'c',
       })
       expect(third.summary).toBe('Rewritten.')
       await store.checkpoint({
-        project: 'github.com/o/r',
-        branch: 'dev',
+        context: 'github.com/o/r',
+        thread: 'dev',
         commit: 'ddd',
         source: 'c',
       })
@@ -438,7 +568,7 @@ describe('store', () => {
 
     it('drops a checkpoint and tolerates dropping a missing one', async () => {
       const store = await open()
-      await store.checkpoint({ project: 'p', branch: 'b', commit: 'abc', source: 'c' })
+      await store.checkpoint({ context: 'p', thread: 'b', commit: 'abc', source: 'c' })
       await store.dropCheckpoint('p', 'b', 'c')
       await store.dropCheckpoint('p', 'b', 'c')
       expect(await store.checkpoints('p')).toEqual([])
@@ -453,7 +583,12 @@ describe('store', () => {
       ['proj', '.git/config'],
     ])('keeps %j @ %j inside checkpoints/', async (project, branch) => {
       const store = await open()
-      const written = await store.checkpoint({ project, branch, commit: 'abc', source: 'c' })
+      const written = await store.checkpoint({
+        context: project,
+        thread: branch,
+        commit: 'abc',
+        source: 'c',
+      })
       await store.close()
       const walk = (dir: string): string[] =>
         readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
@@ -475,18 +610,60 @@ describe('store', () => {
       expect(await reopened.checkpoints(project, branch)).toEqual([written])
     })
 
+    it('records a thread without a commit and reads files written as project and branch', async () => {
+      const store = await open()
+      const saved = await store.checkpoint({
+        context: 'grant-proposal',
+        thread: 'main',
+        summary: 'Budget drafted.',
+        source: 'c',
+      })
+      expect(saved.commit).toBeUndefined()
+      const file = join(repoDir(), 'checkpoints', 'grant-proposal', 'main.md')
+      expect(readFileSync(file, 'utf8')).not.toContain('commit')
+      const kept = await store.checkpoint({
+        context: 'grant-proposal',
+        thread: 'main',
+        source: 'c',
+      })
+      expect(kept.summary).toBe('Budget drafted.')
+      mkdirSync(join(repoDir(), 'checkpoints', 'legacy'), { recursive: true })
+      writeFileSync(
+        join(repoDir(), 'checkpoints', 'legacy', 'dev.md'),
+        [
+          '---',
+          'id: c_legacyaa',
+          'project: github.com/o/legacy',
+          'branch: dev',
+          'commit: abc1234',
+          'updated: 2026-01-01T00:00:00Z',
+          'source: old-client',
+          '---',
+          'Old style.',
+        ].join('\n'),
+      )
+      await store.sync()
+      expect(await store.checkpoints('github.com/o/legacy', 'dev')).toMatchObject([
+        { id: 'c_legacyaa', context: 'github.com/o/legacy', thread: 'dev', commit: 'abc1234' },
+      ])
+      expect((await store.recentCheckpoints(5)).map((c) => c.context)).toEqual([
+        'grant-proposal',
+        'github.com/o/legacy',
+      ])
+    })
+
     it('keeps lossy-slug branches distinct', async () => {
       const store = await open()
       await store.checkpoint({
-        project: 'p',
-        branch: 'feat/a',
+        context: 'p',
+        thread: 'feat/a',
         commit: '1',
         summary: 'slash',
         source: 'c',
       })
       await store.checkpoint({
-        project: 'p',
-        branch: 'feat-a',
+        context: 'p',
+        thread: 'feat-a',
         commit: '2',
         summary: 'dash',
         source: 'c',
@@ -500,8 +677,8 @@ describe('store', () => {
       const first = await open()
       const { memory } = await memorize(first, 'Persistent fact about kettles.')
       await first.checkpoint({
-        project: 'p',
-        branch: 'b',
+        context: 'p',
+        thread: 'b',
         commit: 'abc',
         summary: 's',
         source: 'c',

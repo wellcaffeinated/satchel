@@ -4,9 +4,10 @@
 #   brief:      project, branch, host, and for the main agent the work's filetypes and tags
 #               (subagents load rules when they first edit, see edit-check.sh)
 #   recall:     host (so this machine's memories rank first and other machines' are hidden)
-#   checkpoint: project, branch, commit
-# Branch and commit are only filled for the local project; a call naming another project is
-# left alone. Never touches `memorize` or `save_reference`: tying a memory to a host or to
+#   checkpoint: context (the project id), thread (the branch), commit
+# Branch, thread and commit are only filled for the local project; a call naming another
+# project or context is left alone. A checkpoint still written with the old names
+# `project` and `branch` is renamed to `context` and `thread`. Never touches `memorize` or `save_reference`: tying a memory to a host or to
 # some work is the model's decision.
 # Also records the filetypes and tags each agent's `brief` and `recall` calls load, for the
 # first-edit check. Needs jq (Claude Code replaces the whole input, so it must be merged);
@@ -39,16 +40,19 @@ completed=$(printf '%s' "$input" | jq -c \
   | ($tool | endswith("__recall")) as $isRecall
   | ($tool | endswith("__checkpoint")) as $isCheckpoint
   | if ($isBrief or $isRecall or $isCheckpoint) | not then empty else . end
-  | ($in.project // (if $isRecall then null else $p end)) as $project
-  | ($project == $p) as $here
-  | ($in.branch // (if ($isBrief or $isCheckpoint) and $here and $b != "" then $b else null end))
-    as $branch
+  | (if $isCheckpoint then ($in.context // $in.project // $p)
+     else ($in.project // (if $isRecall then null else $p end)) end) as $where
+  | ($where == $p) as $here
+  | (if $isCheckpoint then ($in.thread // $in.branch // (if $here and $b != "" then $b else null end))
+     else ($in.branch // (if $isBrief and $here and $b != "" then $b else null end)) end) as $line
   | ($isBrief and $agent == "main" and $here and $in.filetypes == null and $in.tags == null)
     as $describeWork
-  | $in
-    + (if $project == null then {} else {project: $project} end)
-    + (if $branch == null then {} else {branch: $branch} end)
-    + (if $isCheckpoint and $in.commit == null and $here and $branch == $b and $c != ""
+  | (if $isCheckpoint then ($in | del(.project, .branch)) else $in end)
+    + (if $where == null then {}
+       elif $isCheckpoint then {context: $where} else {project: $where} end)
+    + (if $line == null then {}
+       elif $isCheckpoint then {thread: $line} else {branch: $line} end)
+    + (if $isCheckpoint and $in.commit == null and $here and $line == $b and $c != ""
        then {commit: $c} else {} end)
     + (if ($isBrief or $isRecall) and $in.host == null and $h != "" then {host: $h} else {} end)
     + (if $describeWork and ($ft | length) > 0 then {filetypes: $ft} else {} end)

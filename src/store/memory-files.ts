@@ -1,5 +1,12 @@
 import { createHash } from 'node:crypto'
-import type { Checkpoint, Memory, Reference, Scope } from '../types.ts'
+import {
+  DEFAULT_MEMORY_KIND,
+  DEFAULT_MEMORY_ORIGIN,
+  DEFAULT_THREAD,
+  MEMORY_KINDS,
+  MEMORY_ORIGINS,
+} from '../config.ts'
+import type { Checkpoint, Memory, MemoryKind, MemoryOrigin, Reference, Scope } from '../types.ts'
 import {
   optionalString,
   optionalStringList,
@@ -7,6 +14,7 @@ import {
   renderFrontmatter,
   requiredString,
 } from './frontmatter.ts'
+import { normaliseTime } from './time.ts'
 
 const ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz234567'
 const ID_PATTERN = /^[mcr]_[a-z2-7]{8}$/
@@ -14,6 +22,10 @@ const UNFENCED_FORMAT = 'markdown'
 const MIN_FENCE = 3
 
 const SCOPE_BY_NAME: Record<string, Scope> = { global: 'global', project: 'project', host: 'host' }
+const KIND_BY_NAME = new Map<string, MemoryKind>(MEMORY_KINDS.map((kind) => [kind, kind]))
+const ORIGIN_BY_NAME = new Map<string, MemoryOrigin>(
+  MEMORY_ORIGINS.map((origin) => [origin, origin]),
+)
 
 /**
  * The rule a memory states: its first paragraph. Embeddings and the similar-memory check
@@ -42,30 +54,96 @@ function requireId(data: Record<string, unknown>, prefix: 'm' | 'c' | 'r'): stri
   return id
 }
 
-export function parseMemory(raw: string): Memory {
-  const { data, body } = parseFrontmatter(raw)
-  if (body === '') throw new Error('empty memory body')
+function parseScope(data: Record<string, unknown>): {
+  scope: Scope
+  project?: string
+  host?: string
+} {
   const scope = SCOPE_BY_NAME[optionalString(data, 'scope') ?? 'global']
   if (!scope) throw new Error(`invalid scope "${String(data.scope)}"`)
   const project = optionalString(data, 'project')
   const host = optionalString(data, 'host')
   if (scope === 'project' && project === undefined) throw new Error('project scope without project')
   if (scope === 'host' && host === undefined) throw new Error('host scope without host')
-  const created = requiredString(data, 'created')
-  const filetypes = optionalStringList(data, 'filetypes')
-  const tags = optionalStringList(data, 'tags')
   return {
-    id: requireId(data, 'm'),
-    topic: requiredString(data, 'topic'),
     scope,
     ...(scope === 'project' && project !== undefined ? { project } : {}),
     ...(scope === 'host' && host !== undefined ? { host } : {}),
+  }
+}
+
+/** The three label lists, present only when non-empty. */
+function parseLabels(data: Record<string, unknown>) {
+  const filetypes = optionalStringList(data, 'filetypes')
+  const tags = optionalStringList(data, 'tags')
+  const about = optionalStringList(data, 'about')
+  return {
     ...(filetypes === undefined ? {} : { filetypes }),
     ...(tags === undefined ? {} : { tags }),
+    ...(about === undefined ? {} : { about }),
+  }
+}
+
+/** A date field, normalised; a value that is not a date makes the file malformed. */
+function parseTime(data: Record<string, unknown>, key: string): string | undefined {
+  const raw = optionalString(data, key)
+  if (raw === undefined) return undefined
+  const time = normaliseTime(raw)
+  if (time === undefined) throw new Error(`"${key}" is not a date: ${raw}`)
+  return time
+}
+
+function parseKind(data: Record<string, unknown>): MemoryKind {
+  const raw = optionalString(data, 'kind') ?? DEFAULT_MEMORY_KIND
+  const kind = KIND_BY_NAME.get(raw)
+  if (!kind) throw new Error(`invalid kind "${raw}"`)
+  return kind
+}
+
+function parseOrigin(data: Record<string, unknown>): MemoryOrigin {
+  const raw = optionalString(data, 'origin') ?? DEFAULT_MEMORY_ORIGIN
+  const origin = ORIGIN_BY_NAME.get(raw)
+  if (!origin) throw new Error(`invalid origin "${raw}"`)
+  return origin
+}
+
+export function parseMemory(raw: string): Memory {
+  const { data, body } = parseFrontmatter(raw)
+  if (body === '') throw new Error('empty memory body')
+  const created = requiredString(data, 'created')
+  const kind = parseKind(data)
+  const date = parseTime(data, 'date')
+  const expires = parseTime(data, 'expires')
+  if (kind === 'event' && date === undefined) throw new Error('event without a date')
+  return {
+    id: requireId(data, 'm'),
+    topic: requiredString(data, 'topic'),
+    kind,
+    origin: parseOrigin(data),
+    ...(date === undefined ? {} : { date }),
+    ...(expires === undefined ? {} : { expires }),
+    ...parseScope(data),
+    ...parseLabels(data),
     created,
     updated: optionalString(data, 'updated') ?? created,
     source: optionalString(data, 'source') ?? 'unknown',
     text: body,
+  }
+}
+
+function scopeData(scoped: { scope: Scope; project?: string; host?: string }) {
+  return {
+    scope: scoped.scope,
+    ...(scoped.project === undefined ? {} : { project: scoped.project }),
+    ...(scoped.host === undefined ? {} : { host: scoped.host }),
+  }
+}
+
+function labelData(labelled: { filetypes?: string[]; tags?: string[]; about?: string[] }) {
+  return {
+    ...(labelled.about?.length ? { about: labelled.about } : {}),
+    ...(labelled.filetypes?.length ? { filetypes: labelled.filetypes } : {}),
+    ...(labelled.tags?.length ? { tags: labelled.tags } : {}),
   }
 }
 
@@ -74,11 +152,12 @@ export function renderMemory(memory: Memory): string {
     data: {
       id: memory.id,
       topic: memory.topic,
-      scope: memory.scope,
-      ...(memory.project === undefined ? {} : { project: memory.project }),
-      ...(memory.host === undefined ? {} : { host: memory.host }),
-      ...(memory.filetypes?.length ? { filetypes: memory.filetypes } : {}),
-      ...(memory.tags?.length ? { tags: memory.tags } : {}),
+      kind: memory.kind,
+      origin: memory.origin,
+      ...(memory.date === undefined ? {} : { date: memory.date }),
+      ...(memory.expires === undefined ? {} : { expires: memory.expires }),
+      ...scopeData(memory),
+      ...labelData(memory),
       created: memory.created,
       updated: memory.updated,
       source: memory.source,
@@ -87,13 +166,17 @@ export function renderMemory(memory: Memory): string {
   })
 }
 
+/** Files written before contexts existed say `project` and `branch`; both forms are read. */
 export function parseCheckpoint(raw: string): Checkpoint {
   const { data, body } = parseFrontmatter(raw)
+  const context = optionalString(data, 'context') ?? requiredString(data, 'project')
+  const thread = optionalString(data, 'thread') ?? optionalString(data, 'branch') ?? DEFAULT_THREAD
+  const commit = optionalString(data, 'commit')
   return {
     id: requireId(data, 'c'),
-    project: requiredString(data, 'project'),
-    branch: requiredString(data, 'branch'),
-    commit: optionalString(data, 'commit') ?? '',
+    context,
+    thread,
+    ...(commit === undefined ? {} : { commit }),
     updated: requiredString(data, 'updated'),
     source: optionalString(data, 'source') ?? 'unknown',
     summary: body,
@@ -104,9 +187,9 @@ export function renderCheckpoint(checkpoint: Checkpoint): string {
   return renderFrontmatter({
     data: {
       id: checkpoint.id,
-      project: checkpoint.project,
-      branch: checkpoint.branch,
-      commit: checkpoint.commit,
+      context: checkpoint.context,
+      thread: checkpoint.thread,
+      ...(checkpoint.commit === undefined ? {} : { commit: checkpoint.commit }),
       updated: checkpoint.updated,
       source: checkpoint.source,
     },
@@ -135,24 +218,17 @@ function unfencedContent(body: string, format: string): string {
 
 export function parseReference(raw: string): Reference {
   const { data, body } = parseFrontmatter(raw)
-  const scope = SCOPE_BY_NAME[optionalString(data, 'scope') ?? 'global']
-  if (!scope) throw new Error(`invalid scope "${String(data.scope)}"`)
   const format = optionalString(data, 'format') ?? UNFENCED_FORMAT
-  const project = optionalString(data, 'project')
-  const host = optionalString(data, 'host')
-  const filetypes = optionalStringList(data, 'filetypes')
-  const tags = optionalStringList(data, 'tags')
   const created = requiredString(data, 'created')
+  const expires = parseTime(data, 'expires')
   return {
     id: requireId(data, 'r'),
     topic: requiredString(data, 'topic'),
     title: requiredString(data, 'title'),
     description: optionalString(data, 'description') ?? '',
-    scope,
-    ...(scope === 'project' && project !== undefined ? { project } : {}),
-    ...(scope === 'host' && host !== undefined ? { host } : {}),
-    ...(filetypes === undefined ? {} : { filetypes }),
-    ...(tags === undefined ? {} : { tags }),
+    ...parseScope(data),
+    ...parseLabels(data),
+    ...(expires === undefined ? {} : { expires }),
     format,
     created,
     updated: optionalString(data, 'updated') ?? created,
@@ -168,11 +244,9 @@ export function renderReference(reference: Reference): string {
       topic: reference.topic,
       title: reference.title,
       description: reference.description,
-      scope: reference.scope,
-      ...(reference.project === undefined ? {} : { project: reference.project }),
-      ...(reference.host === undefined ? {} : { host: reference.host }),
-      ...(reference.filetypes?.length ? { filetypes: reference.filetypes } : {}),
-      ...(reference.tags?.length ? { tags: reference.tags } : {}),
+      ...scopeData(reference),
+      ...labelData(reference),
+      ...(reference.expires === undefined ? {} : { expires: reference.expires }),
       format: reference.format,
       created: reference.created,
       updated: reference.updated,
