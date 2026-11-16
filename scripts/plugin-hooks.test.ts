@@ -219,10 +219,66 @@ describe.skipIf(!HAS_JQ)('plugin hooks', () => {
     expect(updated).toEqual({ context: 'github.com/example/shop', thread: 'dev', summary: 'Done.' })
   })
 
-  it('asks for a hash-only checkpoint by context and thread after a commit', () => {
-    const output = parsed(run(sandbox, 'commit-checkpoint.sh', {}))
-    const context = String((output.hookSpecificOutput as Record<string, unknown>).additionalContext)
-    expect(context).toContain('context=github.com/example/shop, thread=main, commit=')
+  describe('commit checkpoint', () => {
+    const bash = (command: string, cwd = sandbox.repo) =>
+      run(sandbox, 'commit-checkpoint.sh', { tool_name: 'Bash', tool_input: { command }, cwd })
+    const nudge = (output: string) =>
+      output.trim() === ''
+        ? ''
+        : String((parsed(output).hookSpecificOutput as Record<string, unknown>).additionalContext)
+    const head = () =>
+      execFileSync('git', ['-C', sandbox.repo, 'rev-parse', '--short', 'HEAD'], {
+        encoding: 'utf8',
+      }).trim()
+
+    it('asks once for a hash-only checkpoint by context and thread after a commit', () => {
+      const first = nudge(bash('git commit -m "x"'))
+      expect(first).toContain(`context=github.com/example/shop, thread=main, commit=${head()}`)
+      expect(first).toContain('no summary')
+      expect(bash('git commit -m "x"')).toBe('')
+    })
+
+    it('finds the repository from cd and git -C, not the session directory', () => {
+      const commit = `commit=${head()}`
+      expect(
+        nudge(bash(`cd ${sandbox.repo} && git -c user.name=t commit -q`, sandbox.root)),
+      ).toContain(commit)
+      const viaFlag = run(sandbox, 'commit-checkpoint.sh', {
+        session_id: 'session-2',
+        tool_input: { command: 'git -C repo commit --amend --no-edit' },
+        cwd: sandbox.root,
+      })
+      expect(nudge(viaFlag)).toContain(commit)
+    })
+
+    it('stays silent for commands that are not a commit, even ones the if filter lets through', () => {
+      expect(bash('f=~/nothing; echo "$f"')).toBe('')
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: a shell parameter expansion, not a template
+      expect(bash('echo "${NOPE:-git commit}"')).toBe('')
+      expect(bash('git log --oneline -1 && git status')).toBe('')
+      expect(bash(`cd ${sandbox.root} && git commit -m x`)).toBe('')
+    })
+
+    it('stays silent when HEAD is old, so the commit did not happen', () => {
+      execFileSync(
+        'git',
+        [
+          '-C',
+          sandbox.repo,
+          '-c',
+          'user.name=t',
+          '-c',
+          'user.email=t@t',
+          'commit',
+          '-q',
+          '--allow-empty',
+          '-m',
+          'old',
+        ],
+        { env: { ...process.env, GIT_COMMITTER_DATE: '2000-01-01T00:00:00Z' } },
+      )
+      expect(bash('git commit -m "nothing to commit"')).toBe('')
+    })
   })
 
   it('tells subagents where they are working', () => {

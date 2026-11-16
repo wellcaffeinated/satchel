@@ -61,7 +61,7 @@
         "hooks": [
           {
             "type": "command",
-            "if": "Bash(git commit *)",
+            "if": "Bash(git *)",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/commit-checkpoint.sh\"",
             "timeout": 5
           }

@@ -25,7 +25,7 @@ Connects Claude Code to a Satchel memory server so the agent uses it without bei
   agent editing a file type outside the repository's main ones, gets the rules.
 - **SubagentStart hook**: tells each subagent Satchel is available and where it is working.
 - **PostToolUse hook** on `git commit`: asks the agent to record a hash-only checkpoint
-  (`context`, `thread`, `commit`, no summary).
+  (`context`, `thread`, `commit`, no summary), once per new commit.
 - **SessionEnd hook**: a stub. The transcript pass is not built yet.
 - **Skill** `satchel`: when to `recall`, `memorize`, `save_reference` and `checkpoint`.
 
@@ -109,5 +109,11 @@ as the environment-variable form.
   permission prompt. A call it leaves alone goes through the normal permission rules.
 - On a detached HEAD the commit hook stays silent, and the brief covers all checkpoints of
   the context.
-- The commit hook matches `git commit ...`; a commit made as `git -C dir commit` does not
-  trigger it. The agent's own `checkpoint` call at the end of work still records it.
+- The commit hook reads the Bash command itself rather than trusting the `if` filter, which
+  also lets through commands Claude Code cannot analyse (a `~` in an assignment,
+  `${VAR:-x}`). It finds the repository from the command's `cd <dir>` and `git -C <dir>`,
+  since the hook's `cwd` is the session's directory, not one the command moved into, and
+  accepts `git -c key=value commit`. It stays silent when HEAD is more than 10 minutes old
+  (the commit failed) and for a commit it already asked about. A path built from a shell
+  variable cannot be resolved, so that commit is left to the agent's own `checkpoint` at
+  the end of work.

@@ -429,7 +429,8 @@ Code's MCP connection, so the hooks never call the server. Instead:
   `save_reference`.
 - `PostToolUse` on `brief` records the labels lines; `PreToolUse` on file edits uses them
   for the first-edit check above.
-- `PostToolUse` after `git commit` asks the agent for a hash-only `checkpoint`.
+- `PostToolUse` after `git commit` asks the agent for a hash-only `checkpoint`, once per new
+  commit, naming the repository the command committed in.
 - `SubagentStart` tells subagents Satchel is available.
 
 The hooks keep small state files per session and agent under `CLAUDE_PLUGIN_DATA`: which
