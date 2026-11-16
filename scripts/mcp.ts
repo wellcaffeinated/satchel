@@ -17,7 +17,7 @@ const EXIT_TOOL_ERROR = 1
 const EXIT_USAGE = 2
 
 export const USAGE = `Usage:
-  pnpm mcp --list                    tool names and descriptions, with character counts
+  pnpm mcp --list                    tool names, descriptions and arguments, with character counts
   pnpm mcp <tool> ['<json args>']    the instructions, then one tool call's result
 
 Options:
@@ -57,8 +57,24 @@ export function formatInstructions(instructions: string | undefined): string {
   return section('instructions', instructions ?? '')
 }
 
+/** "  name (required): description", one line per argument, as the model reads them. */
+function formatParameters(schema: Tool['inputSchema']): string {
+  const required = new Set(schema.required ?? [])
+  const describe = ([name, property]: [string, unknown]) => {
+    const description =
+      typeof property === 'object' && property !== null && 'description' in property
+        ? String(property.description)
+        : ''
+    const flag = required.has(name) ? ' (required)' : ''
+    return `  ${name}${flag}: ${description}\n`
+  }
+  return Object.entries(schema.properties ?? {})
+    .map(describe)
+    .join('')
+}
+
 function formatTool(tool: Tool): string {
-  return section(tool.name, tool.description ?? '')
+  return `${section(tool.name, tool.description ?? '')}${formatParameters(tool.inputSchema)}`
 }
 
 export function formatTools(tools: Tool[]): string {

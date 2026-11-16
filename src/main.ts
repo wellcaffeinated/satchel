@@ -65,7 +65,11 @@ async function main(): Promise<void> {
   }
   const { config } = result
 
-  const store = await createStore({ dataDir: config.dataDir, embedModel: config.embedModel })
+  const store = await createStore({
+    dataDir: config.dataDir,
+    embedModel: config.embedModel,
+    timeZone: config.timeZone,
+  })
   const app = createApp({
     store,
     authenticate: createAuthMiddleware({
@@ -76,6 +80,7 @@ async function main(): Promise<void> {
     log,
     version: await packageVersion(),
     loopbackHostsOnly: config.auth.none,
+    timeZone: config.timeZone,
   })
   const server = await listen({ app, config })
   installShutdown({ server, store })

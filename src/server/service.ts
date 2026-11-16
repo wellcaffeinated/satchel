@@ -5,6 +5,7 @@ import {
   BRIEF_LOADED_MAX_CHARS,
   CONTEXT_MAX_CHARS,
   DEFAULT_THREAD,
+  DEFAULT_TIME_ZONE,
   FILETYPE_PATTERN,
   RECALL_DEFAULT_LIMIT,
   RECALL_PAGE_MAX_CHARS,
@@ -12,16 +13,14 @@ import {
   TAG_PATTERN,
   THREAD_MAX_CHARS,
 } from '../config.ts'
-import { type Memory, SatchelError, type Store } from '../types.ts'
-import { pageOf } from './paging.ts'
+import { type Forgotten, type Memory, SatchelError, type Store } from '../types.ts'
+import { type Page, pageOf } from './paging.ts'
 import {
   checkpointCommit,
+  createRenderer,
+  type LoadedAbout,
   type LoadedForWork,
   recallFooter,
-  renderBrief,
-  renderMemories,
-  renderMemory,
-  renderReference,
   renderReferenceLine,
   renderReferenceList,
   type WorkLabels,
@@ -37,6 +36,8 @@ import type {
 } from './schemas.ts'
 import { flattenLine } from './text.ts'
 
+const FORGOTTEN_SHOWN_CHARS = 100
+
 export interface SatchelService {
   brief(args: BriefArgs, client: string): Promise<string>
   recall(args: RecallArgs, client: string): Promise<string>
@@ -47,12 +48,14 @@ export interface SatchelService {
   checkpoint(args: CheckpointArgs, client: string): Promise<string>
 }
 
-type ScopedArgs = Pick<MemorizeArgs, 'scope' | 'project' | 'host'>
+type ScopedArgs = Pick<MemorizeArgs, 'scope' | 'context' | 'host'>
 
 const SCOPE_REQUIREMENTS = {
   global: () => undefined,
-  project: (args: ScopedArgs) =>
-    args.project ? undefined : 'scope "project" needs `project` (host/owner/repo).',
+  context: (args: ScopedArgs) =>
+    args.context
+      ? undefined
+      : 'scope "context" needs `context` (the project id, or the undertaking).',
   host: (args: ScopedArgs) => (args.host ? undefined : 'scope "host" needs `host`.'),
 } satisfies Record<NonNullable<ScopedArgs['scope']>, (args: ScopedArgs) => string | undefined>
 
@@ -86,13 +89,12 @@ function assertNewReferenceFields(args: SaveReferenceArgs): void {
   }
 }
 
-function similarSection(newId: string, similar: Memory[]): string[] {
-  if (similar.length === 0) return []
-  return [
-    'Similar existing memories. If one states the same fact, merge: call `memorize` with',
-    `replaces=<its id> and the combined text, then \`forget\` ${newId}.`,
-    renderMemories(similar),
-  ]
+function requireContext(args: CheckpointArgs): string {
+  if (args.context !== undefined) return args.context
+  throw new SatchelError(
+    'invalid',
+    'checkpoint needs `context`: in a repository the project id (host/owner/repo) with the branch as `thread`, as `brief` took them; outside one, a short name for the undertaking, e.g. "grant-proposal".',
+  )
 }
 
 // Requests are lenient: a client describing its work (every dependency, say) should not fail
@@ -122,33 +124,40 @@ function workLabels(args: { filetypes?: string[]; tags?: string[] }): WorkLabels
   return { ...(filetypes?.length ? { filetypes } : {}), ...(tags?.length ? { tags } : {}) }
 }
 
-/** Size of a memory as recall prints it, newline included. */
-function renderedSize(memory: Memory): number {
-  return renderMemory(memory).length + 1
-}
-
-function requireContext(args: CheckpointArgs): string {
-  if (args.context !== undefined) return args.context
-  throw new SatchelError(
-    'invalid',
-    'checkpoint needs `context`: in a repository the id `brief` takes as `project` (host/owner/repo), with the branch as `thread`; outside one, a short name for the undertaking, e.g. "grant-proposal".',
-  )
-}
-
 function threadLabel(context: string, thread: string): string {
   return `${flattenLine(context, CONTEXT_MAX_CHARS)} @ ${flattenLine(thread, THREAD_MAX_CHARS)}`
 }
 
-export function createSatchelService(options: { store: Store }): SatchelService {
-  const { store } = options
+/** What a deleted entry was, in a few words, so the model can confirm it was the right one. */
+function describeForgotten(gone: Forgotten): string {
+  const describers: Record<Forgotten['kind'], () => string> = {
+    memory: () =>
+      gone.kind === 'memory' ? flattenLine(gone.memory.text, FORGOTTEN_SHOWN_CHARS) : '',
+    reference: () =>
+      gone.kind === 'reference'
+        ? `reference "${flattenLine(gone.reference.title, FORGOTTEN_SHOWN_CHARS)}"`
+        : '',
+    checkpoint: () =>
+      gone.kind === 'checkpoint'
+        ? `checkpoint for ${threadLabel(gone.checkpoint.context, gone.checkpoint.thread)}`
+        : '',
+  }
+  return describers[gone.kind]()
+}
 
-  async function loadedForWork(
-    args: BriefArgs,
+export function createSatchelService(options: { store: Store; timeZone?: string }): SatchelService {
+  const { store, timeZone = DEFAULT_TIME_ZONE } = options
+  const render = createRenderer({ timeZone })
+
+  /** Size of a memory as recall prints it, newline included. */
+  function renderedSize(memory: Memory): number {
+    return render.renderMemory(memory).length + 1
+  }
+
+  async function loadedPage(
+    request: Parameters<Store['recall']>[0],
     client: string,
-  ): Promise<LoadedForWork | undefined> {
-    const work = workLabels(args)
-    if (work === undefined) return undefined
-    const request = { ...work, project: args.project, host: args.host }
+  ): Promise<{ page: Page<Memory>; references: Awaited<ReturnType<Store['findReferences']>> }> {
     const [memories, references] = await Promise.all([
       store.recall(request),
       store.findReferences(request),
@@ -160,55 +169,72 @@ export function createSatchelService(options: { store: Store }): SatchelService 
       size: renderedSize,
     })
     await store.logRecall({ ids: page.items.map((memory) => memory.id), client })
-    return { work, page, references }
+    return { page, references }
+  }
+
+  async function loadedForWork(
+    args: BriefArgs,
+    client: string,
+  ): Promise<LoadedForWork | undefined> {
+    const work = workLabels(args)
+    if (work === undefined) return undefined
+    const request = { ...work, context: args.context, host: args.host }
+    return { work, ...(await loadedPage(request, client)) }
+  }
+
+  async function loadedAbout(args: BriefArgs, client: string): Promise<LoadedAbout | undefined> {
+    const about = requestLabels('about', args.about)
+    if (!about?.length) return undefined
+    const request = { about, context: args.context, host: args.host }
+    return { about, ...(await loadedPage(request, client)) }
   }
 
   async function brief(args: BriefArgs, client: string): Promise<string> {
-    const context = args.context ?? args.project
-    const thread = args.thread ?? args.branch
-    const [core, topics, hosts, labels, loaded, checkpoints, recent, projectMemoryCount] =
+    const { context, thread } = args
+    const [core, topics, hosts, labels, loaded, about, checkpoints, recent, contextMemoryCount] =
       await Promise.all([
         store.core(),
         store.topics(),
         store.hosts(),
         store.labels(),
         loadedForWork(args, client),
+        loadedAbout(args, client),
         context === undefined ? [] : store.checkpoints(context, thread),
         context === undefined ? store.recentCheckpoints(RECENT_CHECKPOINTS_MAX) : [],
-        args.project === undefined ? 0 : store.projectMemoryCount(args.project),
+        context === undefined ? 0 : store.contextMemoryCount(context),
       ])
-    return renderBrief({
+    return render.renderBrief({
       core,
       topics,
       hosts,
       host: args.host,
       labels,
       loaded,
-      project: args.project,
+      loadedAbout: about,
       context,
       thread,
       checkpoints,
       recent,
-      projectMemoryCount,
+      contextMemoryCount,
     })
   }
 
   async function recall(args: RecallArgs, client: string): Promise<string> {
     const work = workLabels(args)
     const about = requestLabels('about', args.about)
-    const asked = [args.query, args.topic, args.host, work, about].some(
+    const asked = [args.query, args.topic, args.host, args.kind, work, about].some(
       (value) => value !== undefined,
     )
     if (!asked) {
       throw new SatchelError(
         'invalid',
-        'Give `query`, `topic`, `host`, `filetypes`, `tags` or `about` (or a combination).',
+        'Give `query`, `topic`, `host`, `kind`, `filetypes`, `tags` or `about` (or a combination).',
       )
     }
     const request = {
       query: args.query,
       topic: args.topic,
-      project: args.project,
+      context: args.context,
       host: args.host,
       kind: args.kind,
       ...work,
@@ -231,7 +257,7 @@ export function createSatchelService(options: { store: Store }): SatchelService 
       size: renderedSize,
     })
     await store.logRecall({ ids: page.items.map((memory) => memory.id), client })
-    const shown = page.items.length === 0 ? [] : [renderMemories(page.items)]
+    const shown = page.items.length === 0 ? [] : [render.renderMemories(page.items)]
     return [...shown, ...recallFooter(page), ...referenceLines].join('\n')
   }
 
@@ -245,7 +271,7 @@ export function createSatchelService(options: { store: Store }): SatchelService 
       format: args.format,
       topic: args.topic,
       scope: args.scope,
-      project: args.project,
+      context: args.context,
       host: args.host,
       filetypes: args.filetypes,
       tags: args.tags,
@@ -261,9 +287,18 @@ export function createSatchelService(options: { store: Store }): SatchelService 
 
   async function read(args: ReadArgs, client: string): Promise<string> {
     const found = await store.read(args.id)
-    if (found.kind === 'reference') return renderReference(found.reference)
+    if (found.kind === 'reference') return render.renderReference(found.reference)
     await store.logRecall({ ids: [found.memory.id], client })
-    return renderMemory(found.memory)
+    return render.renderMemory(found.memory)
+  }
+
+  function similarSection(newId: string, similar: Memory[]): string[] {
+    if (similar.length === 0) return []
+    return [
+      'Similar existing memories. If one states the same fact, merge: call `memorize` with',
+      `replaces=<its id> and the combined text, then \`forget\` ${newId}.`,
+      render.renderMemories(similar),
+    ]
   }
 
   async function memorize(args: MemorizeArgs, client: string): Promise<string> {
@@ -278,7 +313,7 @@ export function createSatchelService(options: { store: Store }): SatchelService 
       expires: args.expires,
       about: args.about,
       scope: args.scope,
-      project: args.project,
+      context: args.context,
       host: args.host,
       filetypes: args.filetypes,
       tags: args.tags,
@@ -286,13 +321,21 @@ export function createSatchelService(options: { store: Store }): SatchelService 
       replaces: args.replaces,
       source: client,
     })
+    // The kind and origin are spelled out here even when they are the defaults, so a model
+    // that left them out sees what it saved.
     const verb = args.replaces ? 'Updated' : 'Saved'
-    return [`${verb}:`, renderMemory(memory), ...similarSection(memory.id, similar)].join('\n')
+    // An update that leaves the text alone cannot have created a duplicate.
+    const textUnchanged = args.replaces !== undefined && args.text === undefined
+    return [
+      `${verb} (${memory.kind}, ${memory.origin}):`,
+      render.renderMemory(memory),
+      ...(textUnchanged ? [] : similarSection(memory.id, similar)),
+    ].join('\n')
   }
 
   async function forget(args: ForgetArgs, client: string): Promise<string> {
-    await store.forget(args.id, client)
-    return `Deleted ${flattenLine(args.id, 16)}.`
+    const gone = await store.forget(args.id, client)
+    return `Deleted ${flattenLine(args.id, 16)}: ${describeForgotten(gone)}`
   }
 
   async function checkpoint(args: CheckpointArgs, client: string): Promise<string> {
@@ -302,6 +345,7 @@ export function createSatchelService(options: { store: Store }): SatchelService 
       await store.dropCheckpoint(context, thread, client)
       return `Checkpoint for ${threadLabel(context, thread)} removed.`
     }
+    const [previous] = await store.checkpoints(context, thread)
     const saved = await store.checkpoint({
       context,
       thread,
@@ -311,7 +355,9 @@ export function createSatchelService(options: { store: Store }): SatchelService 
     })
     const at = saved.commit === undefined ? '' : ` at ${checkpointCommit(saved)}`
     const kept = args.summary === undefined && saved.summary !== '' ? ' (stored summary kept)' : ''
-    return `Checkpoint ${saved.id} saved for ${threadLabel(saved.context, saved.thread)}${at}${kept}.`
+    // Said outright, because a default `thread` can silently replace someone else's summary.
+    const verb = previous === undefined ? 'saved' : 'updated, replacing the previous one,'
+    return `Checkpoint ${saved.id} ${verb} for ${threadLabel(saved.context, saved.thread)}${at}${kept}.`
   }
 
   return { brief, recall, memorize, saveReference, read, forget, checkpoint }

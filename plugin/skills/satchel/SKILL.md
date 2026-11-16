@@ -10,10 +10,13 @@ built-in auto memory. The tools come from the `satchel` MCP server.
 
 ## At the start
 
-- Call `brief` once, before other work. The session-start hook names the project and
-  branch to pass; if it did not run, use the `origin` remote as `host/owner/repo` (else the
-  directory name) and the current branch, plus `host`, this machine's short hostname.
-  Missing arguments may be filled in from git and the hostname.
+- Call `brief` once, before other work. The session-start hook names the `context` (the
+  project id) and `thread` (the branch) to pass; if it did not run, use the `origin` remote
+  as `host/owner/repo` (else the directory name) and the current branch, plus `host`, this
+  machine's short hostname. Missing arguments may be filled in from git and the hostname.
+  Outside a repository, `context` is a short name for the undertaking.
+- When the conversation is about particular people, places or things, pass `about`
+  (`["person:alice"]`) to the brief: what is known about them loads in full.
 - The brief lists topics, each with a "read before ..." trigger. Before work that matches
   a trigger, call `recall` with that topic. Use `query` for anything not covered by a topic.
 - In a repository, the brief also loads the rules for the work: the session-start hook
@@ -30,7 +33,7 @@ built-in auto memory. The tools come from the `satchel` MCP server.
   make the edit again.
 - `recall` returns whole memories in pages. When a page ends with "Next page", call again
   with that `offset` until you have them all.
-- Repository conventions (its AGENTS.md, linter config) and project memories override global
+- Repository conventions (its AGENTS.md, linter config) and context memories override global
   preferences.
 
 ## When to memorize
@@ -58,8 +61,9 @@ Rules:
   Use `about` for people, places and things; use `tags` only for work that rules load for.
 - Set `expires` on anything perishable (a plan, an offer, a temporary setup). Expired
   memories disappear from `recall` and the brief on their own.
-- Scope: `global` by default, and for anything not tied to one repository or one machine.
-  - `project` only for facts about that repository (its layout, conventions, decisions).
+- Scope: `global` by default, and for anything not tied to one context or one machine.
+  - `context` only for facts about that repository or undertaking (its layout, conventions,
+    decisions).
   - `host` only for facts about that machine itself: its setup, paths, services, hardware.
   - Where you happen to be running is not a reason to use `host`. "The user likes cheese"
     is global even when it was said on the desktop; "the desktop runs Docker rootless" is
@@ -68,8 +72,8 @@ Rules:
   loads automatically there. A rule about code in any language gets `tags: ["code"]`; a
   TypeScript-only rule gets `filetypes: ["ts", "tsx"]`; an RxJS rule gets both
   `filetypes: ["ts", "js"]` and `tags: ["rxjs"]`. A general preference gets no labels.
-- Pass `host` to `recall` so this machine's memories come first and other machines' stay
-  out. The brief lists which machines have memories of their own; `recall` with only
+- Pass `context` and `host` to `recall` so this context's and machine's memories come first
+  and other machines' stay out. The brief lists which machines have memories of their own; `recall` with only
   `host` lists what is known about one of them.
 - Read the "similar" list in the reply. If one of them covers the same fact, call `memorize`
   again with `replaces: <id>` and the combined text to merge into it, then `forget` the new
@@ -88,18 +92,17 @@ Rules:
 
 ## Checkpoints
 
-- A checkpoint records where work stopped on one `thread` of one `context`. In a repository
-  the context is the project id and the thread is the branch; the hooks fill both. For work
-  outside a repository (a document, a plan, a trip) the context is a short name for the
-  undertaking (`grant-proposal`) and the thread is `main` unless there are several lines of
-  work.
+- A checkpoint records where work stopped on one `thread` of one `context`: the same values
+  the brief took. In a repository the hooks fill both. For work outside a repository (a
+  document, a plan, a trip) the context is a short name for the undertaking
+  (`grant-proposal`) and the thread is `main` unless there are several lines of work.
 - When you stop work, call `checkpoint` with a `summary`: what is done, what is next, what
   is half-finished, and `commit` (HEAD) for code.
 - After each `git commit` a hook asks you to record the new commit. Call `checkpoint` with
   the context, thread and commit it gives and no `summary`, so the stored summary is kept.
 - Use `done: true` once the branch is merged or deleted, or the undertaking is finished.
-- `brief` with `project` and `branch` shows the repository's checkpoint; with `context` it
-  shows any other; with neither it lists the most recent ones.
+- `brief` with `context` and `thread` shows that checkpoint; without them it lists the most
+  recent ones.
 - A checkpoint is a claim about the past. Compare its commit with HEAD (`git log`) before
   relying on it. The session-start hook prints the HEAD commit.
 

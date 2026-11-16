@@ -21,7 +21,7 @@ const ID_PATTERN = /^[mcr]_[a-z2-7]{8}$/
 const UNFENCED_FORMAT = 'markdown'
 const MIN_FENCE = 3
 
-const SCOPE_BY_NAME: Record<string, Scope> = { global: 'global', project: 'project', host: 'host' }
+const SCOPE_BY_NAME: Record<string, Scope> = { global: 'global', context: 'context', host: 'host' }
 const KIND_BY_NAME = new Map<string, MemoryKind>(MEMORY_KINDS.map((kind) => [kind, kind]))
 const ORIGIN_BY_NAME = new Map<string, MemoryOrigin>(
   MEMORY_ORIGINS.map((origin) => [origin, origin]),
@@ -56,18 +56,18 @@ function requireId(data: Record<string, unknown>, prefix: 'm' | 'c' | 'r'): stri
 
 function parseScope(data: Record<string, unknown>): {
   scope: Scope
-  project?: string
+  context?: string
   host?: string
 } {
   const scope = SCOPE_BY_NAME[optionalString(data, 'scope') ?? 'global']
   if (!scope) throw new Error(`invalid scope "${String(data.scope)}"`)
-  const project = optionalString(data, 'project')
+  const context = optionalString(data, 'context')
   const host = optionalString(data, 'host')
-  if (scope === 'project' && project === undefined) throw new Error('project scope without project')
+  if (scope === 'context' && context === undefined) throw new Error('context scope without context')
   if (scope === 'host' && host === undefined) throw new Error('host scope without host')
   return {
     scope,
-    ...(scope === 'project' && project !== undefined ? { project } : {}),
+    ...(scope === 'context' && context !== undefined ? { context } : {}),
     ...(scope === 'host' && host !== undefined ? { host } : {}),
   }
 }
@@ -131,10 +131,10 @@ export function parseMemory(raw: string): Memory {
   }
 }
 
-function scopeData(scoped: { scope: Scope; project?: string; host?: string }) {
+function scopeData(scoped: { scope: Scope; context?: string; host?: string }) {
   return {
     scope: scoped.scope,
-    ...(scoped.project === undefined ? {} : { project: scoped.project }),
+    ...(scoped.context === undefined ? {} : { context: scoped.context }),
     ...(scoped.host === undefined ? {} : { host: scoped.host }),
   }
 }
@@ -166,16 +166,13 @@ export function renderMemory(memory: Memory): string {
   })
 }
 
-/** Files written before contexts existed say `project` and `branch`; both forms are read. */
 export function parseCheckpoint(raw: string): Checkpoint {
   const { data, body } = parseFrontmatter(raw)
-  const context = optionalString(data, 'context') ?? requiredString(data, 'project')
-  const thread = optionalString(data, 'thread') ?? optionalString(data, 'branch') ?? DEFAULT_THREAD
   const commit = optionalString(data, 'commit')
   return {
     id: requireId(data, 'c'),
-    context,
-    thread,
+    context: requiredString(data, 'context'),
+    thread: optionalString(data, 'thread') ?? DEFAULT_THREAD,
     ...(commit === undefined ? {} : { commit }),
     updated: requiredString(data, 'updated'),
     source: optionalString(data, 'source') ?? 'unknown',

@@ -1,7 +1,8 @@
 // Shared types and the seam between storage and the server.
 // See docs/design.md. server/ depends on Store only, never on store/ internals.
 
-export type Scope = 'global' | 'project' | 'host'
+/** Where a memory holds: everywhere, in one context (a repository or an undertaking), or on one machine. */
+export type Scope = 'global' | 'context' | 'host'
 
 /** What sort of thing a memory states. See docs/design.md "Kind, origin, dates and about". */
 export type MemoryKind = 'rule' | 'fact' | 'event' | 'preference'
@@ -18,7 +19,7 @@ export interface Memory {
   expires?: string // after this the memory no longer applies; ISO 8601
   about?: string[] // entities the memory concerns, "name" or "kind:name"; absent when empty
   scope: Scope
-  project?: string // set when scope is "project"
+  context?: string // set when scope is "context": a project id or an undertaking
   host?: string // set when scope is "host"
   filetypes?: string[] // extensions without the dot; absent when empty
   tags?: string[] // lowercase kebab-case labels; absent when empty
@@ -35,7 +36,7 @@ export interface Reference {
   title: string
   description: string // one line
   scope: Scope
-  project?: string
+  context?: string
   host?: string
   filetypes?: string[]
   tags?: string[]
@@ -63,7 +64,7 @@ export interface SaveReferenceInput {
   format?: string // default "markdown"
   topic?: string
   scope?: Scope
-  project?: string
+  context?: string
   host?: string
   filetypes?: string[]
   tags?: string[]
@@ -112,7 +113,7 @@ export interface MemorizeInput {
   expires?: string | null
   about?: string[]
   scope?: Scope // default "global"
-  project?: string
+  context?: string
   host?: string
   filetypes?: string[]
   tags?: string[]
@@ -129,7 +130,8 @@ export interface MemorizeResult {
 export interface RecallInput {
   query?: string
   topic?: string
-  project?: string
+  /** The caller's context: its context-scoped memories rank first and other contexts' are hidden. */
+  context?: string
   /**
    * The caller's machine: its host-scoped memories rank first and other machines' are hidden.
    * Given without query or topic, lists that machine's host-scoped memories.
@@ -164,6 +166,12 @@ export interface CheckpointInput {
   source: string
 }
 
+/** What `forget` removed, so the caller can say what went. */
+export type Forgotten =
+  | { kind: 'memory'; memory: Memory }
+  | { kind: 'reference'; reference: ReferenceSummary }
+  | { kind: 'checkpoint'; checkpoint: Checkpoint }
+
 /** Thrown by Store for caller mistakes; the message is safe to show to a model. */
 export class SatchelError extends Error {
   readonly code: 'unknown_topic' | 'not_found' | 'invalid' | 'too_long'
@@ -197,7 +205,7 @@ export interface Store {
   ): Promise<{ kind: 'memory'; memory: Memory } | { kind: 'reference'; reference: Reference }>
   memorize(input: MemorizeInput): Promise<MemorizeResult>
   /** Deletes a memory, reference or checkpoint by id. Throws SatchelError("not_found"). */
-  forget(id: string, source: string): Promise<void>
+  forget(id: string, source: string): Promise<Forgotten>
   checkpoint(input: CheckpointInput): Promise<Checkpoint>
   /** Removes the checkpoint for a thread; no error when there is none. */
   dropCheckpoint(context: string, thread: string, source: string): Promise<void>
@@ -205,8 +213,8 @@ export interface Store {
   checkpoints(context: string, thread?: string): Promise<Checkpoint[]>
   /** The most recently updated checkpoints across every context. */
   recentCheckpoints(limit: number): Promise<Checkpoint[]>
-  /** Number of live project-scoped memories for a project. */
-  projectMemoryCount(project: string): Promise<number>
+  /** Number of live context-scoped memories of a context. */
+  contextMemoryCount(context: string): Promise<number>
   /** Machines that have host-scoped memories, most memories first. */
   hosts(): Promise<Host[]>
   close(): Promise<void>

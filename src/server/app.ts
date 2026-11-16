@@ -17,6 +17,8 @@ export interface AppOptions {
   authenticate: RequestHandler
   log: Log
   version: string
+  /** IANA zone for rendering dates; UTC when absent. */
+  timeZone?: string
   /** DNS-rebinding protection (Host must be a loopback name). For unauthenticated loopback use. */
   loopbackHostsOnly?: boolean
 }
@@ -43,7 +45,7 @@ function errorHandler(logger: Log): ErrorRequestHandler {
 
 export function createApp(options: AppOptions): Express {
   const { store, authenticate, log: logger, version } = options
-  const service = createSatchelService({ store })
+  const service = createSatchelService({ store, timeZone: options.timeZone })
   const mcp = createMcpHandler({ store, service, log: logger, version })
   const app = express()
 

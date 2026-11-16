@@ -96,7 +96,7 @@ describe.skipIf(!HAS_JQ)('plugin hooks', () => {
 
   it('session start names the work: main file types, code, dependency tags', () => {
     const text = run(sandbox, 'session-start.sh', {})
-    expect(text).toContain('project=github.com/example/shop and branch=main')
+    expect(text).toContain('context=github.com/example/shop and thread=main')
     expect(text).toContain('filetypes [ts] and tags [code, sveltejs-kit, kit, rxjs]')
     expect(text).not.toContain('png')
     expect(text).not.toContain('types-node')
@@ -109,8 +109,8 @@ describe.skipIf(!HAS_JQ)('plugin hooks', () => {
     expect(main).toMatchObject({
       hookSpecificOutput: {
         updatedInput: {
-          project: 'github.com/example/shop',
-          branch: 'main',
+          context: 'github.com/example/shop',
+          thread: 'main',
           filetypes: ['ts'],
           tags: ['code', 'sveltejs-kit', 'kit', 'rxjs'],
         },
@@ -183,7 +183,7 @@ describe.skipIf(!HAS_JQ)('plugin hooks', () => {
     expect(stateFile(sandbox, 'main.loaded')).toBe('')
   })
 
-  it('fills context, thread and commit into a checkpoint for the local project only', () => {
+  it('fills context, thread and commit into a checkpoint for the local context only', () => {
     const head = execFileSync('git', ['-C', sandbox.repo, 'rev-parse', '--short', 'HEAD'], {
       encoding: 'utf8',
     }).trim()
@@ -209,14 +209,14 @@ describe.skipIf(!HAS_JQ)('plugin hooks', () => {
       tool_input: { context: 'grant-proposal', summary: 'Budget drafted.' },
     })
     expect(elsewhere).toBe('')
-    const legacy = parsed(
+    const otherThread = parsed(
       run(sandbox, 'fill-arguments.sh', {
         tool_name: tool('checkpoint'),
-        tool_input: { project: 'github.com/example/shop', branch: 'dev', commit: 'abc' },
+        tool_input: { thread: 'dev', summary: 'Done.' },
       }),
     )
-    const updated = (legacy.hookSpecificOutput as Record<string, unknown>).updatedInput
-    expect(updated).toEqual({ context: 'github.com/example/shop', thread: 'dev', commit: 'abc' })
+    const updated = (otherThread.hookSpecificOutput as Record<string, unknown>).updatedInput
+    expect(updated).toEqual({ context: 'github.com/example/shop', thread: 'dev', summary: 'Done.' })
   })
 
   it('asks for a hash-only checkpoint by context and thread after a commit', () => {
@@ -230,7 +230,7 @@ describe.skipIf(!HAS_JQ)('plugin hooks', () => {
       run(sandbox, 'subagent-start.sh', { agent_id: 'a1', agent_type: 'Explore' }),
     )
     const context = String((output.hookSpecificOutput as Record<string, unknown>).additionalContext)
-    expect(context).toContain('project=github.com/example/shop, branch=main')
+    expect(context).toContain('context=github.com/example/shop, thread=main')
     expect(context).toContain('first edit of a code file')
   })
 })

@@ -45,6 +45,16 @@ describe('loadConfig', () => {
     })
   })
 
+  it('reads the time zone and refuses one Intl does not know', () => {
+    expect(loaded({ SATCHEL_TOKEN: 't' }).timeZone).toBe('UTC')
+    expect(loaded({ SATCHEL_TOKEN: 't', SATCHEL_TIMEZONE: 'America/Toronto' }).timeZone).toBe(
+      'America/Toronto',
+    )
+    expect(failure({ SATCHEL_TOKEN: 't', SATCHEL_TIMEZONE: 'Mars/Olympus' })).toMatch(
+      /SATCHEL_TIMEZONE/,
+    )
+  })
+
   it('rejects a bad port', () => {
     expect(failure({ SATCHEL_TOKEN: 't', SATCHEL_PORT: '80a' })).toMatch(/SATCHEL_PORT/)
     expect(failure({ SATCHEL_TOKEN: 't', SATCHEL_PORT: '70000' })).toMatch(/SATCHEL_PORT/)

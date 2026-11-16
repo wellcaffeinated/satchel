@@ -1,8 +1,8 @@
 ---
 id: m_fixtura5
 topic: python
-scope: project
-project: github.com/example/notes-api
+scope: context
+context: github.com/example/notes-api
 created: 2026-09-04T11:15:00Z
 updated: 2026-09-04T11:15:00Z
 source: hermes

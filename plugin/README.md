@@ -4,17 +4,17 @@ Connects Claude Code to a Satchel memory server so the agent uses it without bei
 
 - **MCP server** `satchel` at `$SATCHEL_URL/mcp`. Authentication is the server's OAuth
   (Cloudflare Managed OAuth in production): run `/mcp` once and sign in.
-- **SessionStart hook**: tells the agent to call `brief` with the current project, branch,
-  host (this machine's short hostname) and the work the repository involves: its main file
+- **SessionStart hook**: tells the agent to call `brief` with the current context (the
+  project id), thread (the branch), host (this machine's short hostname) and the work the
+  repository involves: its main file
   types, the tag `code` when they include code, and tags from top-level dependencies
   (`package.json`, `requirements.txt`). The rules for that work then load with the brief.
   Prints the HEAD commit so the agent can judge the checkpoint, and says when a memory
   belongs to this machine only. After compaction or `/clear` it runs again, and the brief
   reloads the rules.
-- **PreToolUse hook** on `brief`, `recall` and `checkpoint`: fills `project`, `branch` and
-  `host` (for `checkpoint`: `context`, `thread` and `commit`) and, for the main agent's
-  `brief`, the work's `filetypes` and `tags` when the agent leaves them out, so names always
-  match. It records what each agent loads. It
+- **PreToolUse hook** on `brief`, `recall` and `checkpoint`: fills `context`, `thread`,
+  `commit` and `host` and, for the main agent's `brief`, the work's `filetypes` and `tags`
+  when the agent leaves them out, so names always match. It records what each agent loads. It
   never touches `memorize` or `save_reference`: tying a memory to a machine or to some work
   is the agent's decision.
 - **PostToolUse hook** on `brief`: records which file types and tags have rules, from the
@@ -25,7 +25,7 @@ Connects Claude Code to a Satchel memory server so the agent uses it without bei
   agent editing a file type outside the repository's main ones, gets the rules.
 - **SubagentStart hook**: tells each subagent Satchel is available and where it is working.
 - **PostToolUse hook** on `git commit`: asks the agent to record a hash-only checkpoint
-  (`context` = project id, `thread` = branch, `commit`, no summary).
+  (`context`, `thread`, `commit`, no summary).
 - **SessionEnd hook**: a stub. The transcript pass is not built yet.
 - **Skill** `satchel`: when to `recall`, `memorize`, `save_reference` and `checkpoint`.
 
@@ -99,14 +99,15 @@ as the environment-variable form.
 
 ## Notes
 
-- The project name is the `origin` remote reduced to `host/owner/repo`, lower-cased,
-  without `.git`; with no remote it is the directory name.
-- The PreToolUse hook fills arguments only for the local project. A call that names another
-  project or context (a `checkpoint` for work outside the repository, say) is left as
-  written, and so is a call that already has every argument.
+- The context is the project id: the `origin` remote reduced to `host/owner/repo`,
+  lower-cased, without `.git`; with no remote it is the directory name. The thread is the
+  branch.
+- The PreToolUse hook fills arguments only for the local context. A call that names another
+  context (a `checkpoint` for work outside the repository, say) is left as written, and so
+  is a call that already has every argument.
 - When it rewrites a call it also approves it, so `brief` and `checkpoint` run without a
   permission prompt. A call it leaves alone goes through the normal permission rules.
 - On a detached HEAD the commit hook stays silent, and the brief covers all checkpoints of
-  the project.
+  the context.
 - The commit hook matches `git commit ...`; a commit made as `git -C dir commit` does not
   trigger it. The agent's own `checkpoint` call at the end of work still records it.

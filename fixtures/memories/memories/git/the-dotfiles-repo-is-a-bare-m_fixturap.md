@@ -1,8 +1,8 @@
 ---
 id: m_fixturap
 topic: git
-scope: project
-project: gitlab.com/example/dotfiles
+scope: context
+context: gitlab.com/example/dotfiles
 created: 2026-11-18T15:15:00Z
 updated: 2026-11-18T15:15:00Z
 source: claude-code

@@ -94,23 +94,16 @@ describe('checkpoint files', () => {
     expect(parseCheckpoint(raw)).toEqual(CHECKPOINT)
   })
 
-  it('reads project and branch as context and thread', () => {
+  it('needs a context', () => {
     const raw = [
       '---',
       'id: c_abcdefgh',
-      'project: github.com/o/r',
-      'branch: dev',
-      'commit: abc1234',
+      'thread: dev',
       'updated: 2026-11-12T18:04:00Z',
       '---',
-      'Old style.',
-    ].join('\n')
-    expect(parseCheckpoint(raw)).toMatchObject({
-      context: 'github.com/o/r',
-      thread: 'dev',
-      commit: 'abc1234',
-      summary: 'Old style.',
-    })
+      'x',
+    ]
+    expect(() => parseCheckpoint(raw.join('\n'))).toThrow(/context/)
   })
 
   it('defaults the thread to main', () => {

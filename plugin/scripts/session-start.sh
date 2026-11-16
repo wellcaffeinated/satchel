@@ -1,5 +1,5 @@
 #!/bin/sh
-# SessionStart hook: tells the model to call `brief` with this project, branch, host and the
+# SessionStart hook: tells the model to call `brief` with this context, thread, host and the
 # work this repository involves (file types, the `code` tag, dependency tags), so the rules
 # for that work load with the brief. Gives HEAD so it can judge the checkpoint the brief
 # returns. Local only (git, no network): the model's call goes over the OAuth MCP connection.
@@ -14,9 +14,9 @@ dir_of_this_script=$(dirname "$0")
 satchel_enabled || exit 0
 input=$(cat 2>/dev/null) || input=""
 dir=$(satchel_dir "$(satchel_input_cwd "$input")") || exit 0
-project=$(satchel_project "$dir")
-[ -n "$project" ] || exit 0
-branch=$(satchel_branch "$dir")
+context=$(satchel_context "$dir")
+[ -n "$context" ] || exit 0
+thread=$(satchel_thread "$dir")
 head=$(satchel_head "$dir")
 host=$(satchel_host)
 filetypes=$(satchel_filetypes "$dir")
@@ -35,12 +35,12 @@ listed() {
 
 # The backticks are literal Markdown for the model.
 # shellcheck disable=SC2016
-if [ -n "$branch" ]; then
-  printf 'Satchel memory: before other work, call the Satchel `brief` tool with project=%s and branch=%s.\n' "$project" "$branch"
+if [ -n "$thread" ]; then
+  printf 'Satchel memory: before other work, call the Satchel `brief` tool with context=%s and thread=%s.\n' "$context" "$thread"
 elif git -C "$dir" rev-parse --git-dir >/dev/null 2>&1; then
-  printf 'Satchel memory: before other work, call the Satchel `brief` tool with project=%s (detached HEAD, so no branch).\n' "$project"
+  printf 'Satchel memory: before other work, call the Satchel `brief` tool with context=%s (detached HEAD, so no thread).\n' "$context"
 else
-  printf 'Satchel memory: before other work, call the Satchel `brief` tool (project=%s, not a git repository).\n' "$project"
+  printf 'Satchel memory: before other work, call the Satchel `brief` tool (context=%s, not a git repository).\n' "$context"
 fi
 if [ -n "$filetypes" ] || [ -n "$tags" ]; then
   # shellcheck disable=SC2016

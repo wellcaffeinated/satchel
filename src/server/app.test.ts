@@ -44,8 +44,8 @@ const SEED: FakeStoreSeed = {
     memory({
       id: 'm_bbbbbbbb',
       topic: 'docker',
-      scope: 'project',
-      project: 'github.com/me/app',
+      scope: 'context',
+      context: 'github.com/me/app',
       text: 'The app image needs the onnx runtime.',
     }),
   ],
@@ -157,17 +157,17 @@ describe('MCP over Streamable HTTP', () => {
     expect(tools.find((tool) => tool.name === 'forget')?.annotations?.destructiveHint).toBe(true)
   })
 
-  it('brief returns core, topics and the project checkpoint as a claim', async () => {
+  it('brief returns core, topics and the context checkpoint as a claim', async () => {
     const result = await client().callTool({
       name: 'brief',
-      arguments: { project: 'github.com/me/app', branch: 'main' },
+      arguments: { context: 'github.com/me/app', thread: 'main' },
     })
     const text = textOf(result)
     expect(isError(result)).toBe(false)
     expect(text).toContain('The owner prefers pnpm')
     expect(text).toContain('- docker (1)')
     expect(text).toMatch(/^commit: 3f2a9c1$/m)
-    expect(text).toContain('Project memories: 1')
+    expect(text).toContain('Context memories: 1')
     expect(text).toMatch(/compare commit 3f2a9c1 with the repo/)
   })
 
@@ -199,7 +199,7 @@ describe('MCP over Streamable HTTP', () => {
     })
     const text = textOf(result)
     expect(isError(result)).toBe(false)
-    expect(text).toMatch(/^Saved:\n- m_\w{8} \[svelte \| global \| 2026-11-12\]/)
+    expect(text).toMatch(/^Saved \(fact, inferred\):\n- m_\w{8} \[svelte \| global \| 2026-11-12\]/)
     expect(text).toContain('m_aaaaaaaa')
     const saved = [...harness().store.memories.values()].find((m) => m.text.includes('$state.raw'))
     expect(saved?.source).toBe('test-client')
@@ -217,10 +217,10 @@ describe('MCP over Streamable HTTP', () => {
   it('memorize checks scope fields', async () => {
     const result = await client().callTool({
       name: 'memorize',
-      arguments: { text: 'A fact.', topic: 'svelte', scope: 'project' },
+      arguments: { text: 'A fact.', topic: 'svelte', scope: 'context' },
     })
     expect(isError(result)).toBe(true)
-    expect(textOf(result)).toContain('needs `project`')
+    expect(textOf(result)).toContain('needs `context`')
   })
 
   it('keeps host memories to their machine and lists the machines in the brief', async () => {
@@ -277,7 +277,7 @@ describe('MCP over Streamable HTTP', () => {
     const brief = textOf(
       await client().callTool({ name: 'brief', arguments: { context: 'grant-proposal' } }),
     )
-    expect(brief).toContain('## Context grant-proposal')
+    expect(brief).toContain('## Context grant-proposal\nContext memories: 0')
     expect(brief).toContain('summary: Budget section drafted.')
     expect(brief).not.toMatch(/^commit:/m)
     const recent = textOf(await client().callTool({ name: 'brief', arguments: {} }))
@@ -292,17 +292,17 @@ describe('MCP over Streamable HTTP', () => {
   it('checkpoint without context says what to pass, and a hash-only call keeps the summary', async () => {
     const missing = await client().callTool({
       name: 'checkpoint',
-      arguments: { project: 'github.com/me/app', branch: 'main', commit: 'abc1234' },
+      arguments: { thread: 'main', commit: 'abc1234' },
     })
     expect(isError(missing)).toBe(true)
     expect(textOf(missing)).toContain('needs `context`')
-    expect(textOf(missing)).toContain('`brief` takes as `project`')
+    expect(textOf(missing)).toContain('as `brief` took them')
     const kept = await client().callTool({
       name: 'checkpoint',
       arguments: { context: 'github.com/me/app', thread: 'main', commit: 'abc1234' },
     })
     expect(textOf(kept)).toBe(
-      'Checkpoint c_cccccccc saved for github.com/me/app @ main at abc1234 (stored summary kept).',
+      'Checkpoint c_cccccccc updated, replacing the previous one, for github.com/me/app @ main at abc1234 (stored summary kept).',
     )
     await client().callTool({
       name: 'checkpoint',
@@ -330,7 +330,8 @@ describe('MCP over Streamable HTTP', () => {
       arguments: { replaces: id, expires: '2027-01-01' },
     })
     expect(isError(patched)).toBe(false)
-    expect(textOf(patched)).toMatch(/^Updated:\n/)
+    expect(textOf(patched)).toMatch(/^Updated \(preference, stated\):\n/)
+    expect(textOf(patched)).not.toContain('Similar existing memories')
     expect(harness().store.memories.get(id)).toMatchObject({
       text: 'Alice prefers window seats.',
       kind: 'preference',
@@ -393,13 +394,30 @@ describe('MCP over Streamable HTTP', () => {
     )
     expect(events).toContain('Alice moved to Lisbon.')
     expect(events).not.toContain('window seats')
+    const allEvents = textOf(
+      await client().callTool({ name: 'recall', arguments: { kind: 'event' } }),
+    )
+    expect(allEvents).toContain('Alice moved to Lisbon.')
+    expect(allEvents).not.toContain('window seats')
     const brief = textOf(await client().callTool({ name: 'brief', arguments: {} }))
     expect(brief).toMatch(/^About: person:alice \(2\), place:lisbon \(1\)$/m)
+    const loaded = textOf(
+      await client().callTool({
+        name: 'brief',
+        arguments: { about: ['person:alice', 'Bad Value'] },
+      }),
+    )
+    expect(loaded).toContain('## Loaded about person:alice\n')
+    expect(loaded).toContain('Alice moved to Lisbon.')
+    expect(loaded).toContain('Alice prefers window seats.')
+    expect(
+      harness().store.recallLog.filter((entry) => entry.client === 'test-client').length,
+    ).toBeGreaterThan(2)
   })
 
   it('forget deletes and reports not_found as isError', async () => {
     const ok = await client().callTool({ name: 'forget', arguments: { id: 'm_bbbbbbbb' } })
-    expect(textOf(ok)).toBe('Deleted m_bbbbbbbb.')
+    expect(textOf(ok)).toBe('Deleted m_bbbbbbbb: The app image needs the onnx runtime.')
     const again = await client().callTool({ name: 'forget', arguments: { id: 'm_bbbbbbbb' } })
     expect(isError(again)).toBe(true)
     expect(textOf(again)).toContain('No memory or checkpoint')

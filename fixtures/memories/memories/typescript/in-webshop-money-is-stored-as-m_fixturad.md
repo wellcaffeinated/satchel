@@ -1,8 +1,8 @@
 ---
 id: m_fixturad
 topic: typescript
-scope: project
-project: github.com/example/webshop
+scope: context
+context: github.com/example/webshop
 created: 2026-11-10T12:15:00Z
 updated: 2026-11-10T12:15:00Z
 source: claude-code

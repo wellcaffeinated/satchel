@@ -46,7 +46,7 @@ export interface ValidMemoryFields {
   expires?: string
   about?: string[]
   scope: Scope
-  project?: string
+  context?: string
   host?: string
   filetypes?: string[]
   tags?: string[]
@@ -60,7 +60,7 @@ export interface ValidReferenceFields {
   format: string
   topic: string
   scope: Scope
-  project?: string
+  context?: string
   host?: string
   filetypes?: string[]
   tags?: string[]
@@ -118,14 +118,14 @@ export function validateTrigger(trigger: string): string {
   return requireText(trigger.replace(/\s+/g, ' '), 'topic_trigger', TRIGGER_MAX_CHARS)
 }
 
-type Scoped = Pick<MemorizeInput, 'project' | 'host'>
+type Scoped = Pick<MemorizeInput, 'context' | 'host'>
 
-const SCOPE_FIELDS: Record<Scope, (input: Scoped) => { project?: string; host?: string }> = {
+const SCOPE_FIELDS: Record<Scope, (input: Scoped) => { context?: string; host?: string }> = {
   global: () => ({}),
-  project: (input) => ({
-    project: requireText(
-      input.project,
-      'project (required for project scope)',
+  context: (input) => ({
+    context: requireText(
+      input.context,
+      'context (required for context scope)',
       IDENTIFIER_MAX_CHARS,
     ),
   }),
@@ -239,7 +239,7 @@ function memoryAsInput(memory: Memory): Omit<MemorizeInput, 'source'> {
     expires: memory.expires,
     about: memory.about,
     scope: memory.scope,
-    project: memory.project,
+    context: memory.context,
     host: memory.host,
     filetypes: memory.filetypes,
     tags: memory.tags,
@@ -307,7 +307,7 @@ function referenceAsInput(reference: Reference): Omit<SaveReferenceInput, 'sourc
     format: reference.format,
     topic: reference.topic,
     scope: reference.scope,
-    project: reference.project,
+    context: reference.context,
     host: reference.host,
     filetypes: reference.filetypes,
     tags: reference.tags,

@@ -3,7 +3,6 @@ import * as z from 'zod'
 import {
   ABOUT_MAX_CHARS,
   ABOUT_PATTERN,
-  BRANCH_MAX_CHARS,
   CHECKPOINT_SUMMARY_MAX_CHARS,
   COMMIT_MAX_CHARS,
   CONTEXT_MAX_CHARS,
@@ -14,7 +13,6 @@ import {
   MEMORY_KINDS,
   MEMORY_MAX_CHARS,
   MEMORY_ORIGINS,
-  PROJECT_MAX_CHARS,
   RECALL_DEFAULT_LIMIT,
   RECALL_MAX_LIMIT,
   REFERENCE_DESCRIPTION_MAX_CHARS,
@@ -35,20 +33,12 @@ const COMMIT_PATTERN = /^\S+$/
 const QUERY_MAX_CHARS = 500
 const TIME_MAX_CHARS = 40
 
-const project = z
-  .string()
-  .min(1)
-  .max(PROJECT_MAX_CHARS)
-  .describe(
-    'Project id: git origin as host/owner/repo (e.g. github.com/me/app), else the directory name',
-  )
-const branch = z.string().min(1).max(BRANCH_MAX_CHARS).describe('Git branch name')
 const context = z
   .string()
   .min(1)
   .max(CONTEXT_MAX_CHARS)
   .describe(
-    'What the work belongs to: a project id (host/owner/repo) for a repository, else a short name for the undertaking, e.g. "grant-proposal"',
+    'What the work belongs to: in a git repo the project id (origin as host/owner/repo, e.g. github.com/me/app, else the directory name); otherwise a short name for the undertaking, e.g. "grant-proposal"',
   )
 const thread = z
   .string()
@@ -130,17 +120,16 @@ const topic = z
 const kind = z.enum(MEMORY_KINDS)
 
 export const briefShape = {
-  project: project.optional(),
-  branch: branch.optional(),
-  context: context
-    .optional()
-    .describe(
-      'For work outside a repository: the undertaking whose checkpoint to load, e.g. "grant-proposal". Defaults to project',
-    ),
-  thread: thread.optional().describe('The thread whose checkpoint to load. Defaults to branch'),
+  context: context.optional(),
+  thread: thread.optional(),
   host: thisHost.optional(),
   filetypes: workFiletypes.optional(),
   tags: workTags.optional(),
+  about: workAbout
+    .optional()
+    .describe(
+      'People, places or things this conversation concerns, e.g. ["person:alice"]: what is known about them is loaded in full',
+    ),
 }
 
 export const recallShape = {
@@ -151,7 +140,9 @@ export const recallShape = {
     .optional()
     .describe('Words or a question to search for'),
   topic: topic.optional().describe('List memories in this topic'),
-  project: project.optional(),
+  context: context
+    .optional()
+    .describe("Your context: its memories rank first, other contexts' are left out"),
   host: thisHost
     .optional()
     .describe(
@@ -204,15 +195,17 @@ export const memorizeShape = {
   date: time.optional().describe('For an event: the day it happens, YYYY-MM-DD'),
   expires: time
     .optional()
-    .describe('When this stops applying, YYYY-MM-DD; after that it is hidden from recall'),
+    .describe(
+      'When this stops applying: a day YYYY-MM-DD (it still applies that whole day) or a timestamp; after that it is hidden and later deleted',
+    ),
   about: aboutLabel.optional(),
   scope: z
-    .enum(['global', 'project', 'host'])
+    .enum(['global', 'context', 'host'])
     .optional()
     .describe(
-      'global (default): anything not tied to one repo or machine, including preferences. project: only true of that repository (needs project). host: only true of that machine, e.g. its setup or paths (needs host)',
+      'global (default): anything not tied to one context or machine, including preferences. context: only true of that repository or undertaking (needs context). host: only true of that machine, e.g. its setup or paths (needs host)',
     ),
-  project: project.optional(),
+  context: context.optional().describe('The context, used only with scope context'),
   host: z
     .string()
     .min(1)
@@ -282,7 +275,7 @@ export const saveReferenceShape = {
     .describe('Language of the content, e.g. "jsonc", "yaml", "sh"; default "markdown"'),
   topic: memorizeShape.topic,
   scope: memorizeShape.scope,
-  project: project.optional(),
+  context: memorizeShape.context,
   host: memorizeShape.host,
   filetypes: memorizeShape.filetypes,
   tags: memorizeShape.tags,

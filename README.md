@@ -21,8 +21,8 @@ To try the tools without a client, start a throwaway server with sample data and
 
 ```bash
 pnpm sandbox                                   # in one terminal; Ctrl-C stops and cleans up
-pnpm mcp --list                                # tool descriptions with character counts
-pnpm mcp brief '{"project":"github.com/example/webshop","branch":"main"}'
+pnpm mcp --list                                # tool descriptions and arguments, with character counts
+pnpm mcp brief '{"context":"github.com/example/webshop","thread":"main"}'
 ```
 
 Use it from Claude Code with the plugin. In production the plugin signs in through the

@@ -1,13 +1,14 @@
 import { randomBytes } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { CORE_MAX_CHARS, REFERENCES_LISTED_MAX } from '../config.ts'
+import { CORE_MAX_CHARS, EXPIRY_SWEEP_INTERVAL_MS, REFERENCES_LISTED_MAX } from '../config.ts'
 import { createHuggingFaceLoader, type EmbedderLoader } from '../embed/index.ts'
 import { createSearchIndex, hashText, type SearchIndex } from '../index/index.ts'
 import { log } from '../log.ts'
 import {
   type Checkpoint,
   type CheckpointInput,
+  type Forgotten,
   type Host,
   type Labels,
   type MemorizeInput,
@@ -54,12 +55,16 @@ export interface StoreOptions {
   /** Replaces the Hugging Face loader; used by tests. */
   embedderLoader?: EmbedderLoader
   now?: () => Date
+  /** The owner's IANA zone; a day-valued `expires` lasts until that day ends there. */
+  timeZone?: string
   watchDebounceMs?: number
 }
 
 export interface SatchelStore extends Store {
   /** Rescans the repo files now (the watcher does this on its own, debounced). */
   sync(): Promise<void>
+  /** Deletes expired memories and references now; returns their ids. Runs at start and daily. */
+  sweepExpired(): Promise<string[]>
   /** Resolves when the embedding model load has settled and background embedding is done. */
   embeddingsIdle(): Promise<void>
   /** Where the search index lives, for diagnostics. */
@@ -85,15 +90,20 @@ function searchRequest(input: RecallInput) {
   return {
     query,
     topic,
-    project: undefinedIfEmpty(input.project),
+    context: undefinedIfEmpty(input.context),
     host,
     // A host on its own asks what is known about that machine, not for everything.
-    hostScopedOnly: query === undefined && topic === undefined && !labelled,
+    hostScopedOnly: host !== undefined && query === undefined && topic === undefined && !labelled,
     filetypes,
     tags,
     about,
     kind,
-    asked: query !== undefined || topic !== undefined || host !== undefined || labelled,
+    asked:
+      query !== undefined ||
+      topic !== undefined ||
+      host !== undefined ||
+      kind !== undefined ||
+      labelled,
   }
 }
 
@@ -102,6 +112,7 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
     dataDir,
     embedModel,
     now = () => new Date(),
+    timeZone = 'UTC',
     watchDebounceMs = WATCH_DEBOUNCE_MS,
   } = options
   const repoDir = join(dataDir, 'repo')
@@ -111,7 +122,7 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
   const repo = createGitRepo({ dir: repoDir })
   await repo.ensureInitialised()
 
-  const index: SearchIndex = createSearchIndex({ path: indexPath, now })
+  const index: SearchIndex = createSearchIndex({ path: indexPath, now, timeZone })
   const queue = createWriteQueue()
   const topicsFile = createTopicsFile({ path: join(repoDir, 'topics.yaml') })
   const loader =
@@ -229,7 +240,7 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
     if (!asked) {
       throw new SatchelError(
         'invalid',
-        'recall needs a query, a topic, a host, filetypes, tags or about.',
+        'recall needs a query, a topic, a host, a kind, filetypes, tags or about.',
       )
     }
     const queryVector =
@@ -238,6 +249,8 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
   }
 
   async function findReferences(input: RecallInput): Promise<ReferenceSummary[]> {
+    // References have no kind, so a request narrowed to one never lists them.
+    if (input.kind !== undefined) return []
     const { asked: _asked, kind: _kind, ...request } = searchRequest(input)
     return index.findReferences({ ...request, limit: REFERENCES_LISTED_MAX })
   }
@@ -300,7 +313,7 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
       ...(fields.date === undefined ? {} : { date: fields.date }),
       ...(fields.expires === undefined ? {} : { expires: fields.expires }),
       scope: fields.scope,
-      ...(fields.project === undefined ? {} : { project: fields.project }),
+      ...(fields.context === undefined ? {} : { context: fields.context }),
       ...(fields.host === undefined ? {} : { host: fields.host }),
       ...(fields.filetypes === undefined ? {} : { filetypes: fields.filetypes }),
       ...(fields.tags === undefined ? {} : { tags: fields.tags }),
@@ -385,7 +398,7 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
       title: fields.title,
       description: fields.description,
       scope: fields.scope,
-      ...(fields.project === undefined ? {} : { project: fields.project }),
+      ...(fields.context === undefined ? {} : { context: fields.context }),
       ...(fields.host === undefined ? {} : { host: fields.host }),
       ...(fields.filetypes === undefined ? {} : { filetypes: fields.filetypes }),
       ...(fields.tags === undefined ? {} : { tags: fields.tags }),
@@ -414,9 +427,21 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
     return reference
   }
 
-  async function forgetLocked(id: string, rawSource: string) {
+  /** What an id names, so forget can report it; undefined when nothing does. */
+  function entryOf(id: string): Forgotten | undefined {
+    const memory = index.getMemory(id)
+    if (memory) return { kind: 'memory', memory }
+    const reference = index.getReference(id)
+    if (reference) return { kind: 'reference', reference }
+    const checkpoint = index.getCheckpoint(id)
+    if (checkpoint) return { kind: 'checkpoint', checkpoint }
+    return undefined
+  }
+
+  async function forgetLocked(id: string, rawSource: string): Promise<Forgotten> {
     const path = index.pathOfId(id)
-    if (path === undefined)
+    const entry = entryOf(id)
+    if (path === undefined || entry === undefined)
       throw new SatchelError('not_found', `No memory or checkpoint with id "${id}".`)
     await removeRepoFile(path)
     index.deleteByPath(path)
@@ -424,6 +449,23 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
       paths: [path],
       message: commitMessage('forget', id, cleanClientName(rawSource)),
     })
+    return entry
+  }
+
+  async function sweepExpiredLocked(): Promise<string[]> {
+    const expired = index.expiredEntries()
+    if (expired.length === 0) return []
+    for (const entry of expired) {
+      await removeRepoFile(entry.path)
+      index.deleteByPath(entry.path)
+    }
+    const ids = expired.map((entry) => entry.id)
+    await repo.commit({
+      paths: expired.map((entry) => entry.path),
+      message: commitMessage('expire', ids.join(', '), 'satchel'),
+    })
+    log.info('deleted expired entries', { ids })
+    return ids
   }
 
   async function checkpointLocked(input: CheckpointInput): Promise<Checkpoint> {
@@ -462,6 +504,14 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
   // ---- lifecycle ------------------------------------------------------------------------
 
   await queue.run(reconcile)
+  await queue.run(sweepExpiredLocked)
+  const sweepTimer = setInterval(() => {
+    if (queue.isClosed()) return
+    queue
+      .run(sweepExpiredLocked)
+      .catch((error) => log.warn('sweep failed', { error: String(error) }))
+  }, EXPIRY_SWEEP_INTERVAL_MS)
+  sweepTimer.unref()
   const watcher = createRepoWatcher({
     dir: repoDir,
     debounceMs: watchDebounceMs,
@@ -473,6 +523,7 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
   worker.start()
 
   async function close() {
+    clearInterval(sweepTimer)
     watcher.close()
     await queue.close()
     await worker.stop()
@@ -496,9 +547,10 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
       queue.run(() => dropCheckpointLocked(context, thread, source)),
     checkpoints: async (context, thread) => index.listCheckpoints(context, thread),
     recentCheckpoints: async (limit) => index.recentCheckpoints(limit),
-    projectMemoryCount: async (project) => index.projectMemoryCount(project),
+    contextMemoryCount: async (context) => index.contextMemoryCount(context),
     hosts,
     sync,
+    sweepExpired: () => queue.run(sweepExpiredLocked),
     embeddingsIdle: () => worker.whenIdle(),
     close,
   }

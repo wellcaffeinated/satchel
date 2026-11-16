@@ -3,6 +3,7 @@ import { DEFAULT_MEMORY_KIND, DEFAULT_MEMORY_ORIGIN } from '../config.ts'
 import {
   type Checkpoint,
   type CheckpointInput,
+  type Forgotten,
   type Host,
   type Labels,
   type MemorizeInput,
@@ -17,6 +18,7 @@ import {
 } from '../types.ts'
 
 const FIXED_TIME = '2026-11-12T18:04:00Z'
+const DAY = /^\d{4}-\d{2}-\d{2}$/
 
 export interface FakeStoreSeed {
   core?: string
@@ -68,8 +70,11 @@ function matchesQuery(memory: Memory, query: string | undefined): boolean {
   return words.some((word) => memory.text.toLowerCase().includes(word))
 }
 
+/** As the real index: a day lasts through that day (UTC here), a timestamp until it passes. */
 function isLive(entry: { expires?: string }): boolean {
-  return entry.expires === undefined || new Date(entry.expires) > new Date(FIXED_TIME)
+  if (entry.expires === undefined) return true
+  if (DAY.test(entry.expires)) return entry.expires >= FIXED_TIME.slice(0, 10)
+  return new Date(entry.expires) > new Date(FIXED_TIME)
 }
 
 /** Present only when non-empty, as the real store keeps them. */
@@ -129,7 +134,7 @@ export function createFakeStore(seed: FakeStoreSeed = {}): FakeStore {
   async function recall(input: RecallInput): Promise<Memory[]> {
     if (input.topic !== undefined && !triggers.has(input.topic)) throw unknownTopic(input.topic)
     const visible = (m: Memory) =>
-      (m.scope !== 'project' || input.project === undefined || m.project === input.project) &&
+      (m.scope !== 'context' || input.context === undefined || m.context === input.context) &&
       (m.scope !== 'host' || input.host === undefined || m.host === input.host)
     const labelled = input.filetypes !== undefined || input.tags !== undefined
     const hostOnly =
@@ -149,6 +154,7 @@ export function createFakeStore(seed: FakeStoreSeed = {}): FakeStore {
   }
 
   async function findReferences(input: RecallInput): Promise<ReferenceSummary[]> {
+    if (input.kind !== undefined) return []
     const labelled = input.filetypes !== undefined || input.tags !== undefined
     const words = input.query?.toLowerCase().split(/\s+/).filter(Boolean) ?? []
     const mentions = (r: Reference) =>
@@ -182,7 +188,7 @@ export function createFakeStore(seed: FakeStoreSeed = {}): FakeStore {
       title: requireField(merged.title, 'title'),
       description: requireField(merged.description, 'description'),
       scope: merged.scope ?? 'global',
-      ...(merged.scope === 'project' ? { project: merged.project } : {}),
+      ...(merged.scope === 'context' ? { context: merged.context } : {}),
       ...(merged.scope === 'host' ? { host: merged.host } : {}),
       ...listField('filetypes', merged.filetypes),
       ...listField('tags', merged.tags),
@@ -248,7 +254,7 @@ export function createFakeStore(seed: FakeStoreSeed = {}): FakeStore {
       ...(merged.date ? { date: merged.date } : {}),
       ...(merged.expires ? { expires: merged.expires } : {}),
       scope: merged.scope ?? 'global',
-      ...(merged.scope === 'project' ? { project: merged.project } : {}),
+      ...(merged.scope === 'context' ? { context: merged.context } : {}),
       ...(merged.scope === 'host' ? { host: merged.host } : {}),
       ...listField('filetypes', merged.filetypes),
       ...listField('tags', merged.tags),
@@ -265,11 +271,21 @@ export function createFakeStore(seed: FakeStoreSeed = {}): FakeStore {
     return { memory, similar }
   }
 
-  async function forget(id: string): Promise<void> {
-    if (memories.delete(id) || references.delete(id)) return
-    const key = [...checkpointsByKey].find(([, c]) => c.id === id)?.[0]
-    if (key === undefined) throw new SatchelError('not_found', `No memory or checkpoint ${id}.`)
-    checkpointsByKey.delete(key)
+  async function forget(id: string): Promise<Forgotten> {
+    const memory = memories.get(id)
+    if (memory) {
+      memories.delete(id)
+      return { kind: 'memory', memory }
+    }
+    const reference = references.get(id)
+    if (reference) {
+      references.delete(id)
+      return { kind: 'reference', reference }
+    }
+    const found = [...checkpointsByKey].find(([, c]) => c.id === id)
+    if (found === undefined) throw new SatchelError('not_found', `No memory or checkpoint ${id}.`)
+    checkpointsByKey.delete(found[0])
+    return { kind: 'checkpoint', checkpoint: found[1] }
   }
 
   async function checkpoint(input: CheckpointInput): Promise<Checkpoint> {
@@ -305,8 +321,8 @@ export function createFakeStore(seed: FakeStoreSeed = {}): FakeStore {
       .slice(0, limit)
   }
 
-  async function projectMemoryCount(project: string): Promise<number> {
-    return live().filter((m) => m.scope === 'project' && m.project === project).length
+  async function contextMemoryCount(context: string): Promise<number> {
+    return live().filter((m) => m.scope === 'context' && m.context === context).length
   }
 
   async function hosts(): Promise<Host[]> {
@@ -339,7 +355,7 @@ export function createFakeStore(seed: FakeStoreSeed = {}): FakeStore {
     dropCheckpoint,
     checkpoints,
     recentCheckpoints,
-    projectMemoryCount,
+    contextMemoryCount,
     hosts,
     close: async () => {
       state.closed = true

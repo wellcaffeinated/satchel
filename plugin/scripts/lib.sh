@@ -20,7 +20,7 @@ satchel_input_cwd() { # json
   satchel_input_field "$1" cwd
 }
 
-# Directory the hook should look at: the first argument, else the project dir, else $PWD.
+# Directory the hook should look at: the first argument, else Claude's project dir, else $PWD.
 satchel_dir() {
   for d in "$1" "${CLAUDE_PROJECT_DIR:-}" "$PWD"; do
     if [ -n "$d" ] && [ -d "$d" ]; then
@@ -31,9 +31,9 @@ satchel_dir() {
   return 1
 }
 
-# project identifier: origin remote reduced to host/owner/repo, lower-cased, without .git;
-# the directory name when there is no remote.
-satchel_project() { # dir
+# The context: the project id, origin remote reduced to host/owner/repo, lower-cased, without
+# .git; the directory name when there is no remote.
+satchel_context() { # dir
   url=$(git -C "$1" remote get-url origin 2>/dev/null) || url=""
   if [ -n "$url" ]; then
     printf '%s\n' "$url" | sed \
@@ -50,8 +50,8 @@ satchel_project() { # dir
   basename "$top"
 }
 
-# Current branch name; prints nothing on a detached HEAD or outside a repository.
-satchel_branch() { # dir
+# The thread: the current branch; prints nothing on a detached HEAD or outside a repository.
+satchel_thread() { # dir
   git -C "$1" symbolic-ref --short -q HEAD 2>/dev/null
 }
 

@@ -5,7 +5,7 @@ import { renderLabelsLines, renderTopicLine, USAGE_RULES } from './render.ts'
 
 export const RULES = [
   'Satchel is your long-term memory, shared across sessions and agents.',
-  '- Call `brief` once at the start of a conversation, with `project` and `branch` if known.',
+  '- Call `brief` once at the start of a conversation, with `context` and `thread` if known.',
   USAGE_RULES,
 ].join('\n')
 

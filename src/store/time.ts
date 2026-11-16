@@ -17,11 +17,6 @@ export function normaliseTime(value: string): string | undefined {
   return parsed.toISOString().replace(MILLIS, 'Z')
 }
 
-/** The instant a stored value names, as a sortable UTC timestamp; a day is its midnight UTC. */
-export function toInstant(value: string): string {
-  return new Date(value).toISOString().replace(MILLIS, 'Z')
-}
-
 export function formatTimestamp(date: Date): string {
   return date.toISOString().replace(MILLIS, 'Z')
 }

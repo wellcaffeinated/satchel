@@ -50,12 +50,12 @@ describe('search index', () => {
     temp.remove()
   })
 
-  it('ranks by bm25 and hides other projects', () => {
+  it('ranks by bm25 and hides other contexts', () => {
     const index = create()
     add(index, memory('m_aaaaaaaa', 'kettle descaling schedule'))
-    add(index, memory('m_bbbbbbbb', 'kettle', { scope: 'project', project: 'one' }))
-    add(index, memory('m_cccccccc', 'kettle kettle kettle', { scope: 'project', project: 'two' }))
-    const found = index.search({ query: 'kettle', project: 'one', limit: 10 })
+    add(index, memory('m_bbbbbbbb', 'kettle', { scope: 'context', context: 'one' }))
+    add(index, memory('m_cccccccc', 'kettle kettle kettle', { scope: 'context', context: 'two' }))
+    const found = index.search({ query: 'kettle', context: 'one', limit: 10 })
     expect(found.map((m) => m.id)).toEqual(['m_bbbbbbbb', 'm_aaaaaaaa'])
   })
 
@@ -241,6 +241,24 @@ describe('search index', () => {
     expect(index.getMemory('m_bbbbbbbb')?.expires).toBe('2026-05-01')
     clock.now = new Date('2026-08-01T00:00:00Z')
     expect(ids({ topic: 'general' })).toEqual([])
+  })
+
+  it('keeps a day-valued expiry through that whole day in the owner zone', () => {
+    // 22:00 on Nov 30 in Toronto is already Dec 1 in UTC.
+    const clock = { now: new Date('2026-12-01T03:00:00Z') }
+    const index = createSearchIndex({
+      path: dbPath(),
+      now: () => clock.now,
+      timeZone: 'America/Toronto',
+    })
+    open.push(index)
+    add(index, memory('m_aaaaaaaa', 'quote valid until nov 30', { expires: '2026-11-30' }))
+    add(index, memory('m_bbbbbbbb', 'quote valid until nov 29', { expires: '2026-11-29' }))
+    expect(index.search({ topic: 'general' }).map((m) => m.id)).toEqual(['m_aaaaaaaa'])
+    expect(index.expiredEntries().map((entry) => entry.id)).toEqual(['m_bbbbbbbb'])
+    clock.now = new Date('2026-12-01T05:00:00Z')
+    expect(index.search({ topic: 'general' })).toEqual([])
+    expect(index.expiredEntries().map((entry) => entry.id)).toEqual(['m_aaaaaaaa', 'm_bbbbbbbb'])
   })
 
   it('keeps one checkpoint per context and thread and lists the most recent', () => {

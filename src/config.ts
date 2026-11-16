@@ -25,6 +25,10 @@ export const MEMORY_ORIGINS = ['stated', 'inferred', 'imported'] as const
 export const DEFAULT_MEMORY_KIND = 'fact'
 export const DEFAULT_MEMORY_ORIGIN = 'inferred'
 export const RECENT_CHECKPOINTS_MAX = 10
+// Expired memories and references are hidden at once and deleted by a sweep this often.
+export const EXPIRY_SWEEP_INTERVAL_MS = 1000 * 60 * 60 * 24
+// Dates are rendered in this zone; stored values stay UTC.
+export const DEFAULT_TIME_ZONE = 'UTC'
 export const TOPIC_NAME_MAX_CHARS = 32
 export const TOPIC_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 export const TRIGGER_MAX_CHARS = 160
@@ -36,8 +40,6 @@ export const BRIEF_LOADED_MAX_CHARS = 32_000
 // A client may describe its work with many labels (every dependency, say).
 export const REQUEST_LABELS_MAX_COUNT = 100
 export const CLIENT_NAME_MAX_CHARS = 64
-export const PROJECT_MAX_CHARS = 200
-export const BRANCH_MAX_CHARS = 200
 export const CONTEXT_MAX_CHARS = 200
 export const THREAD_MAX_CHARS = 200
 export const DEFAULT_THREAD = 'main'
@@ -72,6 +74,7 @@ export interface Config {
   host: string
   port: number
   embedModel: string // model id or "off"
+  timeZone: string // an IANA name, for rendering dates
   auth: AuthConfig
 }
 
@@ -145,6 +148,15 @@ function parseNoneMode(env: Env, host: string): { none: boolean; error?: string 
   return { none: true }
 }
 
+export function isTimeZone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-CA', { timeZone: value })
+    return true
+  } catch {
+    return false
+  }
+}
+
 /** The token is kept byte for byte; only an all-blank value counts as unset. */
 function parseToken(env: Env): string | undefined {
   return nonEmpty(env.SATCHEL_TOKEN) === undefined ? undefined : env.SATCHEL_TOKEN
@@ -160,6 +172,12 @@ export function loadConfig(env: Env): ConfigResult {
   const { none, error: noneError } = parseNoneMode(env, host)
   if (noneError) return fail(noneError)
   const token = parseToken(env)
+  const timeZone = nonEmpty(env.SATCHEL_TIMEZONE) ?? DEFAULT_TIME_ZONE
+  if (!isTimeZone(timeZone)) {
+    return fail(
+      `SATCHEL_TIMEZONE must be an IANA zone name such as America/Toronto, not "${timeZone}"`,
+    )
+  }
 
   if (!cfAccess && !token && !none) {
     return fail(
@@ -173,6 +191,7 @@ export function loadConfig(env: Env): ConfigResult {
     host,
     port,
     embedModel: nonEmpty(env.SATCHEL_EMBED_MODEL) ?? DEFAULT_EMBED_MODEL,
+    timeZone,
     auth: { cfAccess, token, none },
   }
   return { ok: true, config }

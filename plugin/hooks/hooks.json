@@ -1,5 +1,5 @@
 {
-  "description": "Satchel: ask for the brief at session start with the work's file types and tags, fill project/branch/host/labels into brief and recall calls and context/thread/commit into checkpoint calls, record which labels have rules, ask an agent to load rules before its first edit of a file type, tell subagents Satchel is there, ask for a hash-only checkpoint after git commit, session-end stub",
+  "description": "Satchel: ask for the brief at session start with the work's file types and tags, fill context/thread/host/labels into brief, recall and checkpoint calls, record which labels have rules, ask an agent to load rules before its first edit of a file type, tell subagents Satchel is there, ask for a hash-only checkpoint after git commit, session-end stub",
   "hooks": {
     "SessionStart": [
       {

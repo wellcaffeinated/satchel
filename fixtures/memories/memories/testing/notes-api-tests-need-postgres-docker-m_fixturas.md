@@ -1,8 +1,8 @@
 ---
 id: m_fixturas
 topic: testing
-scope: project
-project: github.com/example/notes-api
+scope: context
+context: github.com/example/notes-api
 created: 2026-10-27T09:15:00Z
 updated: 2026-10-27T09:15:00Z
 source: claude-code

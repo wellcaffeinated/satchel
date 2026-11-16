@@ -56,7 +56,7 @@ describe('parseCli', () => {
 
   it('turns --list and a tool name into server commands', () => {
     expect(parseCli(['--list']).command.kind).toBe('server')
-    expect(parseCli(['brief', '{"project":"p"}']).command.kind).toBe('server')
+    expect(parseCli(['brief', '{"context":"p"}']).command.kind).toBe('server')
   })
 
   it('reads connection flags', () => {
@@ -109,6 +109,7 @@ describe('runMcp', () => {
     expect(code).toBe(0)
     expect(out.output()).toMatch(/^--- brief \(\d+ chars\)$/m)
     expect(out.output()).toContain('--- 7 tools,')
+    expect(out.output()).toMatch(/^ {2}text: .+$/m)
   })
 
   it('prints the instructions, then the result of one call', async () => {

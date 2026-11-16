@@ -30,16 +30,35 @@ export function indentContinuation(text: string, indent: string): string {
   return lines.filter((line) => line.trim() !== '').join(`\n${indent}`)
 }
 
-/** "2026-11-12" from an ISO timestamp; the raw value, flattened, when it does not parse. */
-export function isoDate(timestamp: string): string {
-  const parsed = new Date(timestamp)
-  if (Number.isNaN(parsed.getTime())) return flattenLine(timestamp, 32)
-  return parsed.toISOString().slice(0, 10)
+type DateParts = Record<string, string>
+
+/** The pieces of a timestamp in one zone, by part name ("year", "hour", "timeZoneName"). */
+function partsIn(parsed: Date, timeZone: string): DateParts {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+    timeZoneName: 'short',
+  })
+  return Object.fromEntries(formatter.formatToParts(parsed).map((part) => [part.type, part.value]))
 }
 
-/** "2026-11-12 18:04 UTC" from an ISO timestamp. */
-export function isoMinute(timestamp: string): string {
+/** "2026-11-12", the day in `timeZone`; the raw value, flattened, when it does not parse. */
+export function isoDate(timestamp: string, timeZone: string): string {
   const parsed = new Date(timestamp)
   if (Number.isNaN(parsed.getTime())) return flattenLine(timestamp, 32)
-  return `${parsed.toISOString().slice(0, 16).replace('T', ' ')} UTC`
+  const parts = partsIn(parsed, timeZone)
+  return `${parts.year}-${parts.month}-${parts.day}`
+}
+
+/** "2026-11-12 18:04 UTC" (or "13:04 EST"): the minute in `timeZone`, with the zone's name. */
+export function isoMinute(timestamp: string, timeZone: string): string {
+  const parsed = new Date(timestamp)
+  if (Number.isNaN(parsed.getTime())) return flattenLine(timestamp, 32)
+  const parts = partsIn(parsed, timeZone)
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute} ${parts.timeZoneName}`
 }

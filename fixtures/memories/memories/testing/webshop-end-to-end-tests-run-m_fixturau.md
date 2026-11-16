@@ -1,8 +1,8 @@
 ---
 id: m_fixturau
 topic: testing
-scope: project
-project: github.com/example/webshop
+scope: context
+context: github.com/example/webshop
 created: 2026-08-05T11:15:00Z
 updated: 2026-08-05T11:15:00Z
 source: claude-code

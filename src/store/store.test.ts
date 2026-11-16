@@ -272,8 +272,8 @@ describe('store', () => {
       const first = await memorize(store, 'Alice prefers window seats.', {
         kind: 'preference',
         origin: 'stated',
-        scope: 'project',
-        project: 'github.com/o/r',
+        scope: 'context',
+        context: 'github.com/o/r',
         tags: ['travel'],
         about: ['person:alice'],
         expires: '2027-01-01',
@@ -287,8 +287,8 @@ describe('store', () => {
         text: 'Alice prefers aisle seats.',
         kind: 'preference',
         origin: 'stated',
-        scope: 'project',
-        project: 'github.com/o/r',
+        scope: 'context',
+        context: 'github.com/o/r',
         tags: ['travel'],
         about: ['person:alice'],
         expires: '2027-01-01',
@@ -303,7 +303,7 @@ describe('store', () => {
       })
       expect(cleared.memory.tags).toBeUndefined()
       expect(cleared.memory.expires).toBeUndefined()
-      expect(cleared.memory.project).toBeUndefined()
+      expect(cleared.memory.context).toBeUndefined()
       expect(cleared.memory).toMatchObject({ scope: 'global', about: ['person:alice'] })
       const raw = readFileSync(
         join(
@@ -441,20 +441,20 @@ describe('store', () => {
       expect(found).toHaveLength(1)
     })
 
-    it('filters by project and ranks the project first', async () => {
+    it('filters by context and ranks the context first', async () => {
       const store = await open()
       await memorize(store, 'Deploy notes for alpha service.', {
-        scope: 'project',
-        project: 'alpha',
+        scope: 'context',
+        context: 'alpha',
       })
-      await memorize(store, 'Deploy notes for beta service.', { scope: 'project', project: 'beta' })
+      await memorize(store, 'Deploy notes for beta service.', { scope: 'context', context: 'beta' })
       await memorize(store, 'Deploy notes everywhere.')
-      const found = await store.recall({ query: 'deploy notes', project: 'alpha' })
+      const found = await store.recall({ query: 'deploy notes', context: 'alpha' })
       expect(found.map((m) => m.text)).toEqual([
         'Deploy notes for alpha service.',
         'Deploy notes everywhere.',
       ])
-      expect(await store.projectMemoryCount('alpha')).toBe(1)
+      expect(await store.contextMemoryCount('alpha')).toBe(1)
     })
 
     it('keeps host memories to their machine and lists the machines', async () => {
@@ -475,6 +475,21 @@ describe('store', () => {
         { name: 'desktop', count: 1 },
         { name: 'nas', count: 1 },
       ])
+    })
+
+    it('lists every memory of a kind when the kind is all that is asked', async () => {
+      const store = await open()
+      await memorize(store, 'Flight to Lisbon.', { kind: 'event', date: '2026-12-03' })
+      await memorize(store, 'Alice likes aisle seats.', { kind: 'preference' })
+      await memorize(store, 'Trailer pickup.', {
+        kind: 'event',
+        date: '2026-12-06',
+        scope: 'host',
+        host: 'nas',
+      })
+      const events = await store.recall({ kind: 'event' })
+      expect(events.map((m) => m.text).toSorted()).toEqual(['Flight to Lisbon.', 'Trailer pickup.'])
+      expect(await store.findReferences({ kind: 'event' })).toEqual([])
     })
 
     it('lists a whole topic oldest first and logs what the caller says it showed', async () => {
@@ -610,7 +625,7 @@ describe('store', () => {
       expect(await reopened.checkpoints(project, branch)).toEqual([written])
     })
 
-    it('records a thread without a commit and reads files written as project and branch', async () => {
+    it('records a thread without a commit and keeps the summary', async () => {
       const store = await open()
       const saved = await store.checkpoint({
         context: 'grant-proposal',
@@ -627,29 +642,7 @@ describe('store', () => {
         source: 'c',
       })
       expect(kept.summary).toBe('Budget drafted.')
-      mkdirSync(join(repoDir(), 'checkpoints', 'legacy'), { recursive: true })
-      writeFileSync(
-        join(repoDir(), 'checkpoints', 'legacy', 'dev.md'),
-        [
-          '---',
-          'id: c_legacyaa',
-          'project: github.com/o/legacy',
-          'branch: dev',
-          'commit: abc1234',
-          'updated: 2026-01-01T00:00:00Z',
-          'source: old-client',
-          '---',
-          'Old style.',
-        ].join('\n'),
-      )
-      await store.sync()
-      expect(await store.checkpoints('github.com/o/legacy', 'dev')).toMatchObject([
-        { id: 'c_legacyaa', context: 'github.com/o/legacy', thread: 'dev', commit: 'abc1234' },
-      ])
-      expect((await store.recentCheckpoints(5)).map((c) => c.context)).toEqual([
-        'grant-proposal',
-        'github.com/o/legacy',
-      ])
+      expect((await store.recentCheckpoints(5)).map((c) => c.context)).toEqual(['grant-proposal'])
     })
 
     it('keeps lossy-slug branches distinct', async () => {

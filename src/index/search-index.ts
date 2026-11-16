@@ -20,7 +20,7 @@ import type {
 import { matchQueryFromTokens, tokenize, toMatchQuery } from './fts-query.ts'
 import { cosine, reciprocalRankFusion } from './rank.ts'
 
-const SCHEMA_VERSION = 4
+const SCHEMA_VERSION = 6
 /** Candidates taken from each ranked list before fusion. */
 const CANDIDATES_PER_LIST = 100
 /** Cosine below this is noise, not a paraphrase. Tuned against bge-small. */
@@ -50,7 +50,7 @@ const CREATE_INDEX_TABLES = `
   CREATE TABLE memories(
     id TEXT PRIMARY KEY, topic TEXT NOT NULL, kind TEXT NOT NULL, origin TEXT NOT NULL,
     date TEXT, expires TEXT, expires_at TEXT,
-    scope TEXT NOT NULL, project TEXT, host TEXT,
+    scope TEXT NOT NULL, context TEXT, host TEXT,
     filetypes TEXT NOT NULL, tags TEXT NOT NULL, about TEXT NOT NULL,
     created TEXT NOT NULL, updated TEXT NOT NULL, source TEXT NOT NULL, text TEXT NOT NULL,
     text_hash TEXT NOT NULL);
@@ -60,7 +60,7 @@ const CREATE_INDEX_TABLES = `
   CREATE INDEX labels_value ON labels(kind, value);
   CREATE TABLE reference_docs(
     id TEXT PRIMARY KEY, topic TEXT NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL,
-    scope TEXT NOT NULL, project TEXT, host TEXT,
+    scope TEXT NOT NULL, context TEXT, host TEXT,
     filetypes TEXT NOT NULL, tags TEXT NOT NULL, about TEXT NOT NULL, expires TEXT, expires_at TEXT,
     format TEXT NOT NULL, created TEXT NOT NULL, updated TEXT NOT NULL, source TEXT NOT NULL,
     content TEXT NOT NULL);
@@ -84,8 +84,8 @@ type Row = Record<string, SQLOutputValue>
 
 export interface SearchFilter {
   topic?: string
-  /** Hides other projects' project-scoped memories. */
-  project?: string
+  /** Hides other contexts' context-scoped memories. */
+  context?: string
   /** Hides other machines' host-scoped memories. */
   host?: string
   /** Only host-scoped memories (of `host`, when given). */
@@ -135,13 +135,14 @@ export interface SearchIndex {
   /** topic -> number of references. */
   referenceTopicCounts(): Map<string, number>
   findCheckpoint(context: string, thread: string): Checkpoint | undefined
+  getCheckpoint(id: string): Checkpoint | undefined
   /** A context's checkpoints, most recently updated first; one when thread is given. */
   listCheckpoints(context: string, thread?: string): Checkpoint[]
   recentCheckpoints(limit: number): Checkpoint[]
   topicCounts(): Map<string, number>
   /** kind ('filetype' | 'tag' | 'about') -> value -> count, most used first. */
   labelCounts(): { kind: string; value: string; count: number }[]
-  projectMemoryCount(project: string): number
+  contextMemoryCount(context: string): number
   /** host -> number of host-scoped memories. */
   hostCounts(): Map<string, number>
   search(input: SearchInput): Memory[]
@@ -150,6 +151,8 @@ export interface SearchIndex {
   pendingEmbeddings(input: { model: string; limit: number }): PendingEmbedding[]
   vectorCount(model: string): number
   logRecall(input: { ids: string[]; client: string }): void
+  /** Memories and references whose `expires` has passed, with the files that hold them. */
+  expiredEntries(): { id: string; path: string }[]
   /** Drops and recreates every index table except recall_log. */
   rebuild(): void
   close(): void
@@ -165,12 +168,13 @@ function optionalText(row: Row, key: string): string | undefined {
   return typeof value === 'string' ? value : undefined
 }
 
-const SCOPE_BY_NAME: Record<string, Scope> = { global: 'global', project: 'project', host: 'host' }
+const SCOPE_BY_NAME: Record<string, Scope> = { global: 'global', context: 'context', host: 'host' }
 const KIND_BY_NAME = new Map<string, MemoryKind>(MEMORY_KINDS.map((kind) => [kind, kind]))
 const ORIGIN_BY_NAME = new Map<string, MemoryOrigin>(
   MEMORY_ORIGINS.map((origin) => [origin, origin]),
 )
 const MILLIS = /\.\d{3}Z$/
+const DAY = /^\d{4}-\d{2}-\d{2}$/
 
 /** Label lists are stored as JSON text beside the row, and one row each in `labels`. */
 function labelList(row: Row, key: string): string[] {
@@ -180,14 +184,14 @@ function labelList(row: Row, key: string): string[] {
 
 /** The scope and label columns shared by memories and references, present only when set. */
 function scopedAndLabelled(row: Row) {
-  const project = optionalText(row, 'project')
+  const context = optionalText(row, 'context')
   const host = optionalText(row, 'host')
   const filetypes = labelList(row, 'filetypes')
   const tags = labelList(row, 'tags')
   const about = labelList(row, 'about')
   return {
     scope: SCOPE_BY_NAME[text(row, 'scope')] ?? 'global',
-    ...(project === undefined ? {} : { project }),
+    ...(context === undefined ? {} : { context }),
     ...(host === undefined ? {} : { host }),
     ...(filetypes.length === 0 ? {} : { filetypes }),
     ...(tags.length === 0 ? {} : { tags }),
@@ -242,9 +246,12 @@ function toCheckpoint(row: Row): Checkpoint {
   }
 }
 
-/** A stored day or timestamp as a sortable UTC instant, for the expiry comparison. */
+/**
+ * A stored timestamp as a sortable UTC instant, for the expiry comparison. A day has none:
+ * it applies through that whole day in the owner's zone, which `liveClause` checks.
+ */
 function instantOf(value: string | undefined): string | null {
-  if (value === undefined) return null
+  if (value === undefined || DAY.test(value)) return null
   const parsed = new Date(value)
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().replace(MILLIS, 'Z')
 }
@@ -270,6 +277,9 @@ const LABEL_KINDS = { filetypes: 'filetype', tags: 'tag', about: 'about' } as co
 const WORK_LABEL_KINDS = `('${LABEL_KINDS.filetypes}', '${LABEL_KINDS.tags}')`
 
 type Clause = { sql: string; params: SQLInputValue[] }
+
+/** Now, as a UTC instant and as the owner's calendar day. */
+type Moment = { instant: string; day: string }
 
 /**
  * One label field of the matching rule: a memory that sets this field must share a value
@@ -310,16 +320,29 @@ function aboutClause(about: string[] | undefined): Clause[] {
   ]
 }
 
-/** Expired rows are hidden everywhere but `getMemory`. */
-function liveClause(now: string): Clause {
-  return { sql: '(m.expires_at IS NULL OR m.expires_at > ?)', params: [now] }
+/** "2026-11-30": the calendar day `date` falls on in `timeZone`. */
+function localDay(date: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone, dateStyle: 'short' }).format(date)
 }
 
-function filterClause(filter: SearchFilter, now: string): Clause {
-  const { topic, project, host, hostScopedOnly, kind } = filter
+/**
+ * Expired rows are hidden everywhere but `getMemory`. Every branch is true or false, never
+ * NULL, so `NOT` of this clause selects exactly the expired rows.
+ */
+function liveClause(now: Moment): Clause {
+  return {
+    sql: `(m.expires IS NULL
+      OR (m.expires_at IS NOT NULL AND m.expires_at > ?)
+      OR (m.expires_at IS NULL AND m.expires >= ?))`,
+    params: [now.instant, now.day],
+  }
+}
+
+function filterClause(filter: SearchFilter, now: Moment): Clause {
+  const { topic, context, host, hostScopedOnly, kind } = filter
   const parts = [
     { sql: 'm.topic = ?', value: topic },
-    { sql: "(m.scope != 'project' OR m.project = ?)", value: project },
+    { sql: "(m.scope != 'context' OR m.context = ?)", value: context },
     { sql: "(m.scope != 'host' OR m.host = ?)", value: host },
     { sql: 'm.kind = ?', value: kind },
   ].filter((part) => part.value !== undefined)
@@ -380,13 +403,19 @@ function openDatabase(path: string): DatabaseSync {
 export function createSearchIndex({
   path,
   now = () => new Date(),
+  timeZone = 'UTC',
 }: {
   path: string
   now?: () => Date
+  /** The owner's IANA zone: a day-valued `expires` lasts until that day ends there. */
+  timeZone?: string
 }): SearchIndex {
   const db = openDatabase(path)
-  const nowInstant = () => now().toISOString().replace(MILLIS, 'Z')
-  const liveFilter = (filter: SearchFilter) => filterClause(filter, nowInstant())
+  const moment = (): Moment => {
+    const date = now()
+    return { instant: date.toISOString().replace(MILLIS, 'Z'), day: localDay(date, timeZone) }
+  }
+  const liveFilter = (filter: SearchFilter) => filterClause(filter, moment())
 
   function all(sql: string, params: SQLInputValue[] = []): Row[] {
     return db.prepare(sql).all(...params)
@@ -442,7 +471,7 @@ export function createSearchIndex({
         memory.id,
       ])
       run(
-        `INSERT INTO memories(id, topic, kind, origin, date, expires, expires_at, scope, project,
+        `INSERT INTO memories(id, topic, kind, origin, date, expires, expires_at, scope, context,
            host, filetypes, tags, about, created, updated, source, text, text_hash)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
@@ -454,7 +483,7 @@ export function createSearchIndex({
           memory.expires ?? null,
           instantOf(memory.expires),
           memory.scope,
-          memory.project ?? null,
+          memory.context ?? null,
           memory.host ?? null,
           JSON.stringify(memory.filetypes ?? []),
           JSON.stringify(memory.tags ?? []),
@@ -511,7 +540,7 @@ export function createSearchIndex({
         reference.id,
       ])
       run(
-        `INSERT INTO reference_docs(id, topic, title, description, scope, project, host, filetypes,
+        `INSERT INTO reference_docs(id, topic, title, description, scope, context, host, filetypes,
            tags, about, expires, expires_at, format, created, updated, source, content)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
@@ -520,7 +549,7 @@ export function createSearchIndex({
           reference.title,
           reference.description,
           reference.scope,
-          reference.project ?? null,
+          reference.context ?? null,
           reference.host ?? null,
           JSON.stringify(reference.filetypes ?? []),
           JSON.stringify(reference.tags ?? []),
@@ -666,11 +695,11 @@ export function createSearchIndex({
       .slice(0, limit)
   }
 
-  /** The caller's own project and machine first; the order is otherwise kept. */
+  /** The caller's own context and machine first; the order is otherwise kept. */
   function byLocalFirst(filter: SearchFilter, memories: Memory[]): Memory[] {
-    if (filter.project === undefined && filter.host === undefined) return memories
+    if (filter.context === undefined && filter.host === undefined) return memories
     const isLocal = (memory: Memory) =>
-      (filter.project !== undefined && memory.project === filter.project) ||
+      (filter.context !== undefined && memory.context === filter.context) ||
       (filter.host !== undefined && memory.host === filter.host)
     const rank = (memory: Memory) => (isLocal(memory) ? 0 : 1)
     return memories.toSorted((a, b) => rank(a) - rank(b))
@@ -684,16 +713,16 @@ export function createSearchIndex({
        ORDER BY
          CASE WHEN EXISTS (SELECT 1 FROM labels l WHERE l.id = m.id AND l.kind = 'filetype')
            THEN 1 ELSE 0 END,
-         CASE WHEN m.project = ? OR m.host = ? THEN 0 ELSE 1 END,
+         CASE WHEN m.context = ? OR m.host = ? THEN 0 ELSE 1 END,
          m.topic, m.created, m.id`,
-      [...clause.params, input.project ?? null, input.host ?? null],
+      [...clause.params, input.context ?? null, input.host ?? null],
     ).map(toMemory)
   }
 
   function hybridSearch({
     query,
     topic,
-    project,
+    context,
     host,
     hostScopedOnly,
     filetypes,
@@ -703,7 +732,7 @@ export function createSearchIndex({
     limit = CANDIDATES_PER_LIST,
     queryVector,
   }: SearchInput & { query: string }) {
-    const filter = { topic, project, host, hostScopedOnly, filetypes, tags, about, kind }
+    const filter = { topic, context, host, hostScopedOnly, filetypes, tags, about, kind }
     const match = toMatchQuery(query)
     const textHits = match ? ftsCandidates({ match, filter, limit: CANDIDATES_PER_LIST }) : []
     const vectorHits = queryVector
@@ -801,6 +830,10 @@ export function createSearchIndex({
       return kind === 'memory' || kind === 'reference' || kind === 'checkpoint' ? kind : undefined
     },
     getMemory,
+    getCheckpoint(id) {
+      const row = one('SELECT * FROM checkpoints WHERE id = ?', [id])
+      return row ? toCheckpoint(row) : undefined
+    },
     findCheckpoint(context, thread) {
       const row = one('SELECT * FROM checkpoints WHERE context = ? AND thread = ?', [
         context,
@@ -824,7 +857,7 @@ export function createSearchIndex({
     getReference,
     findReferences,
     referenceTopicCounts() {
-      const live = liveClause(nowInstant())
+      const live = liveClause(moment())
       const rows = all(
         `SELECT topic, count(*) AS n FROM reference_docs m WHERE ${live.sql} GROUP BY topic`,
         live.params,
@@ -833,7 +866,7 @@ export function createSearchIndex({
     },
     labelCounts() {
       // Memories only: these lines say what can be loaded, and references never are.
-      const live = liveClause(nowInstant())
+      const live = liveClause(moment())
       return all(
         `SELECT l.kind, l.value, count(*) AS n FROM labels l JOIN memories m ON m.id = l.id
          WHERE ${live.sql} GROUP BY l.kind, l.value ORDER BY l.kind, n DESC, l.value`,
@@ -841,23 +874,23 @@ export function createSearchIndex({
       ).map((row) => ({ kind: text(row, 'kind'), value: text(row, 'value'), count: Number(row.n) }))
     },
     topicCounts() {
-      const live = liveClause(nowInstant())
+      const live = liveClause(moment())
       const rows = all(
         `SELECT topic, count(*) AS n FROM memories m WHERE ${live.sql} GROUP BY topic`,
         live.params,
       )
       return new Map(rows.map((row) => [text(row, 'topic'), Number(row.n)]))
     },
-    projectMemoryCount(project) {
-      const live = liveClause(nowInstant())
+    contextMemoryCount(context) {
+      const live = liveClause(moment())
       const row = one(
-        `SELECT count(*) AS n FROM memories m WHERE scope = 'project' AND project = ? AND ${live.sql}`,
-        [project, ...live.params],
+        `SELECT count(*) AS n FROM memories m WHERE scope = 'context' AND context = ? AND ${live.sql}`,
+        [context, ...live.params],
       )
       return Number(row?.n ?? 0)
     },
     hostCounts() {
-      const live = liveClause(nowInstant())
+      const live = liveClause(moment())
       const rows = all(
         `SELECT host, count(*) AS n FROM memories m
          WHERE scope = 'host' AND host IS NOT NULL AND ${live.sql} GROUP BY host`,
@@ -889,6 +922,18 @@ export function createSearchIndex({
           run('INSERT INTO recall_log(memory_id, ts, client) VALUES (?, ?, ?)', [id, ts, client])
         }
       })
+    },
+    expiredEntries() {
+      const live = liveClause(moment())
+      return all(
+        `SELECT f.id AS id, f.path AS path FROM files f JOIN memories m ON m.id = f.id
+           WHERE NOT ${live.sql}
+         UNION ALL
+         SELECT f.id AS id, f.path AS path FROM files f JOIN reference_docs m ON m.id = f.id
+           WHERE NOT ${live.sql}
+         ORDER BY id`,
+        [...live.params, ...live.params],
+      ).map((row) => ({ id: text(row, 'id'), path: text(row, 'path') }))
     },
     rebuild() {
       dropIndexTables(db)
