@@ -22,6 +22,9 @@ changing anything: it is the contract for the data layout, the tools and the mod
 - SQLite through the built-in `node:sqlite`. No native database dependency.
 - `src/server/` reaches storage only through the `Store` interface in `src/types.ts`.
 - Nothing client-specific in `src/`. Claude Code glue goes in `plugin/`.
+- Any change under `plugin/` bumps `version` in `plugin/.claude-plugin/plugin.json`: Claude
+  Code updates an installed plugin only when that version changes. It is the plugin's own
+  version, apart from the server's (`package.json`, image tags from `v*.*.*`).
 - Tests sit next to the module they test (`user-session.ts` -> `user-session.test.ts`),
   one test file per module. They must not need the network: tests that touch embeddings
   use `SATCHEL_EMBED_MODEL=off` or a fake embedder.
