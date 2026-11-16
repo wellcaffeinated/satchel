@@ -27,6 +27,13 @@ mkdir -p data && sudo chown 1000:1000 data     # the image runs as uid 1000
 docker compose up -d --build
 ```
 
+To run the published image instead of building, set `image:` in `compose.yaml` to
+`ghcr.io/<owner>/<repo>:latest` (or a version tag such as `:0.2`), remove `build:`, and use
+`docker compose up -d`. The `Build and publish container` workflow pushes it to GitHub
+Packages from `main` (`latest`, `main`, `sha-<commit>`) and from `v*.*.*` tags (`0.2.0`, `0.2`),
+after typecheck, lint and tests pass. A new package is private: make it public in its
+settings, or `docker login ghcr.io` on the host first.
+
 Leave the auth variables in `.env` empty for now except one: until Access is set up in
 step 3, set `SATCHEL_TOKEN` to a throwaway value (`openssl rand -hex 16`) so the server
 starts. Remove it again in step 3.
