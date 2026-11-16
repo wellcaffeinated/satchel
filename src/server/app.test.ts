@@ -1,8 +1,11 @@
 // biome-ignore-all lint/style/useNamingConvention: HTTP header and tool argument names are fixed by docs/design.md
 import type { Server } from 'node:http'
-import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js'
+import {
+  type CallToolResult,
+  Client,
+  type ClientOptions,
+  StreamableHTTPClientTransport,
+} from '@modelcontextprotocol/client'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { createAuthMiddleware } from '../auth/auth.ts'
 import { INSTRUCTIONS_MAX_CHARS } from '../config.ts'
@@ -92,8 +95,23 @@ async function start(seed: FakeStoreSeed = SEED): Promise<Harness> {
   }
 }
 
-async function connect(base: string, name = 'test-client'): Promise<Client> {
-  const client = new Client({ name, version: '1.0.0' })
+type Era = 'modern' | 'legacy'
+
+const VERSION_NEGOTIATION = {
+  modern: { mode: { pin: '2026-07-28' } },
+  legacy: { mode: 'legacy' },
+} satisfies Record<Era, ClientOptions['versionNegotiation']>
+
+async function connect(
+  base: string,
+  options: { name?: string; era?: Era | 'auto' } = {},
+): Promise<Client> {
+  const era = options.era ?? 'modern'
+  const versionNegotiation = era === 'auto' ? { mode: 'auto' as const } : VERSION_NEGOTIATION[era]
+  const client = new Client(
+    { name: options.name ?? 'test-client', version: '1.0.0' },
+    { versionNegotiation },
+  )
   const transport = new StreamableHTTPClientTransport(new URL('/mcp', base), {
     requestInit: { headers: AUTH_HEADERS },
   })
@@ -101,16 +119,15 @@ async function connect(base: string, name = 'test-client'): Promise<Client> {
   return client
 }
 
-function textOf(result: unknown): string {
-  const { content } = CallToolResultSchema.parse(result)
-  return content.map((part) => (part.type === 'text' ? part.text : '')).join('')
+function textOf(result: CallToolResult): string {
+  return result.content.map((part) => (part.type === 'text' ? part.text : '')).join('')
 }
 
-function isError(result: unknown): boolean {
-  return CallToolResultSchema.parse(result).isError === true
+function isError(result: CallToolResult): boolean {
+  return result.isError === true
 }
 
-describe('MCP over Streamable HTTP', () => {
+describe.each(['modern', 'legacy'] as const)('MCP over Streamable HTTP, %s era', (era) => {
   const state: { harness?: Harness; client?: Client } = {}
   const harness = () => {
     if (!state.harness) throw new Error('not started')
@@ -123,7 +140,7 @@ describe('MCP over Streamable HTTP', () => {
 
   beforeAll(async () => {
     state.harness = await start()
-    state.client = await connect(state.harness.base)
+    state.client = await connect(state.harness.base, { era })
   })
   afterAll(async () => {
     await state.client?.close()
@@ -563,6 +580,21 @@ describe('references over MCP', () => {
     const read = await call('read', { id })
     expect(read.text).toMatch(/```jsonc\n\{ "linter": \{\} \}\n```$/)
     expect((await call('read', { id: 'r_zzzzzzzz' })).isError).toBe(true)
+  })
+})
+
+describe('protocol version negotiation', () => {
+  const state: { harness?: Harness } = {}
+  beforeAll(async () => {
+    state.harness = await start()
+  })
+  afterAll(() => state.harness?.close())
+
+  it('a client probing with server/discover gets the 2026-07-28 era, not a fallback', async () => {
+    const client = await connect(state.harness?.base ?? '', { era: 'auto' })
+    expect(client.getProtocolEra()).toBe('modern')
+    expect(client.getInstructions()).toContain('Call `brief` once at the start')
+    await client.close()
   })
 })
 

@@ -314,12 +314,17 @@ export const checkpointShape = {
 }
 
 export const briefSchema = z.object(briefShape)
+export const recallSchema = z.object(recallShape)
+export const memorizeSchema = z.object(memorizeShape)
+export const forgetSchema = z.object(forgetShape)
+export const readSchema = z.object(readShape)
+export const saveReferenceSchema = z.object(saveReferenceShape)
 export const checkpointSchema = z.object(checkpointShape)
 
 export type BriefArgs = z.infer<typeof briefSchema>
-export type RecallArgs = z.infer<z.ZodObject<typeof recallShape>>
-export type MemorizeArgs = z.infer<z.ZodObject<typeof memorizeShape>>
-export type ForgetArgs = z.infer<z.ZodObject<typeof forgetShape>>
-export type ReadArgs = z.infer<z.ZodObject<typeof readShape>>
-export type SaveReferenceArgs = z.infer<z.ZodObject<typeof saveReferenceShape>>
+export type RecallArgs = z.infer<typeof recallSchema>
+export type MemorizeArgs = z.infer<typeof memorizeSchema>
+export type ForgetArgs = z.infer<typeof forgetSchema>
+export type ReadArgs = z.infer<typeof readSchema>
+export type SaveReferenceArgs = z.infer<typeof saveReferenceSchema>
 export type CheckpointArgs = z.infer<typeof checkpointSchema>

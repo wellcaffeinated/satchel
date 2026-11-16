@@ -1,5 +1,5 @@
 // The Express app: /healthz (unauthenticated), then auth, then /mcp.
-import { localhostHostValidation } from '@modelcontextprotocol/sdk/server/middleware/hostHeaderValidation.js'
+import { localhostHostValidation } from '@modelcontextprotocol/express'
 import express, { type ErrorRequestHandler, type Express, type RequestHandler } from 'express'
 import { JSON_BODY_LIMIT_BYTES } from '../config.ts'
 import type { log } from '../log.ts'

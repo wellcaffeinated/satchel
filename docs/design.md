@@ -225,8 +225,10 @@ docs/               this file, deploy.md, plugin-oauth.md
 ## MCP surface
 
 Transport: Streamable HTTP at `POST/GET/DELETE /mcp`, stateless where the SDK allows it.
+Both protocol eras are served: 2026-07-28 (a `server/discover` probe, then a `_meta`
+envelope on every request) and 2025 (the `initialize` handshake). GET and DELETE answer 405.
 
-### `instructions` (initialize result)
+### `instructions` (`server/discover` or `initialize` result)
 
 Generated per connection. Contains the usage rules, then the topic map, then the labels
 lines. Total at most `INSTRUCTIONS_MAX_CHARS` (3,800; Claude Code truncates at 4,096).
@@ -310,8 +312,10 @@ Details:
 - Checkpoints are shown by `brief`, not `recall`.
 - Limits: context and thread 200 characters, host 100; commit one token of at most
   64; checkpoint summary 3,000.
-- The transport is stateless, so the writer's name from `initialize` is carried in the
-  `Mcp-Session-Id` value and read back on later requests. It is a label, not a credential.
+- The writer's name is the client's `clientInfo.name`. 2026-07-28 clients send it in every
+  request's `_meta` envelope. 2025 clients send it only on `initialize`, and the transport is
+  stateless, so for them it is carried in the `Mcp-Session-Id` value and read back on later
+  requests. It is a label, not a credential.
 - Tool results are text only, with no `structuredContent`, because some clients show the
   structured form to the model in place of the text.
 

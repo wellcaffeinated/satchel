@@ -1,5 +1,11 @@
+import { CLIENT_INFO_META_KEY } from '@modelcontextprotocol/server'
 import { describe, expect, it } from 'vitest'
-import { clientFromSessionId, sanitizeClientName, sessionIdFor } from './client-identity.ts'
+import {
+  clientFromEnvelope,
+  clientFromSessionId,
+  sanitizeClientName,
+  sessionIdFor,
+} from './client-identity.ts'
 
 describe('client identity', () => {
   it('round-trips a client name through the session id', () => {
@@ -19,5 +25,17 @@ describe('client identity', () => {
     expect(sanitizeClientName('a'.repeat(200), 'fallback').length).toBeLessThanOrEqual(64)
     expect(sanitizeClientName('', 'fallback')).toBe('fallback')
     expect(sanitizeClientName(undefined, 'fallback')).toBe('fallback')
+  })
+
+  it('reads the client name from a 2026-07-28 request envelope', () => {
+    const envelope = { [CLIENT_INFO_META_KEY]: { name: 'claude-code', version: '2' } }
+    expect(clientFromEnvelope(envelope)).toBe('claude-code')
+  })
+
+  it('has no name for a missing or malformed envelope', () => {
+    expect(clientFromEnvelope(undefined)).toBeUndefined()
+    expect(clientFromEnvelope({})).toBeUndefined()
+    expect(clientFromEnvelope({ [CLIENT_INFO_META_KEY]: 'claude-code' })).toBeUndefined()
+    expect(clientFromEnvelope({ [CLIENT_INFO_META_KEY]: { name: '' } })).toBeUndefined()
   })
 })

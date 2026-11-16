@@ -3,9 +3,12 @@
 // Connects to the running `pnpm sandbox` unless --url is given. See docs/design.md.
 
 import { parseArgs } from 'node:util'
-import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import { CallToolResultSchema, type Tool } from '@modelcontextprotocol/sdk/types.js'
+import {
+  type CallToolResult,
+  Client,
+  StreamableHTTPClientTransport,
+  type Tool,
+} from '@modelcontextprotocol/client'
 import { log } from '../src/log.ts'
 import { readSandboxState, type SandboxState } from './sandbox.ts'
 
@@ -23,7 +26,7 @@ export const USAGE = `Usage:
 Options:
   --url <base>      server base URL (default: the running pnpm sandbox)
   --token <token>   bearer token (default with no --url: the sandbox's token)
-  --client <name>   clientInfo name sent on initialize (default: ${DEFAULT_CLIENT_NAME})
+  --client <name>   clientInfo name the server records as the writer (default: ${DEFAULT_CLIENT_NAME})
 `
 
 type Write = (text: string) => void
@@ -83,11 +86,10 @@ export function formatTools(tools: Tool[]): string {
 }
 
 /** The text a model would read from a tool result, and whether the server flagged an error. */
-export function resultText(result: unknown): { text: string; isError: boolean } {
-  const parsed = CallToolResultSchema.parse(result)
-  const describe = (part: (typeof parsed.content)[number]) =>
+export function resultText(result: CallToolResult): { text: string; isError: boolean } {
+  const describe = (part: CallToolResult['content'][number]) =>
     part.type === 'text' ? part.text : `[${part.type} content]`
-  return { text: parsed.content.map(describe).join('\n'), isError: parsed.isError === true }
+  return { text: result.content.map(describe).join('\n'), isError: result.isError === true }
 }
 
 async function listTools(client: Client, write: Write): Promise<number> {
@@ -176,7 +178,11 @@ async function connect(options: { url: string; token?: string; clientName: strin
   const headers = options.token
     ? Object.fromEntries([['Authorization', `Bearer ${options.token}`]])
     : undefined
-  const client = new Client({ name: options.clientName, version: CLIENT_VERSION })
+  // Probe like Claude Code does: the 2026-07-28 era when the server offers it, else 2025.
+  const client = new Client(
+    { name: options.clientName, version: CLIENT_VERSION },
+    { versionNegotiation: { mode: 'auto' } },
+  )
   const transport = new StreamableHTTPClientTransport(new URL('/mcp', options.url), {
     requestInit: { headers },
   })

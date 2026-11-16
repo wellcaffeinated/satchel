@@ -1,16 +1,16 @@
 // MCP tool registration. Descriptions are the main prompt a model sees: they say when to call.
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
+import type { CallToolResult, McpServer, ServerContext } from '@modelcontextprotocol/server'
 import type { log } from '../log.ts'
 import { SatchelError } from '../types.ts'
+import { clientFromEnvelope } from './client-identity.ts'
 import {
-  briefShape,
-  checkpointShape,
-  forgetShape,
-  memorizeShape,
-  readShape,
-  recallShape,
-  saveReferenceShape,
+  briefSchema,
+  checkpointSchema,
+  forgetSchema,
+  memorizeSchema,
+  readSchema,
+  recallSchema,
+  saveReferenceSchema,
 } from './schemas.ts'
 import type { SatchelService } from './service.ts'
 
@@ -66,37 +66,44 @@ export async function runTool(
 
 export function registerSatchelTools(
   server: McpServer,
-  options: { service: SatchelService; client: string; log: Log },
+  options: {
+    service: SatchelService
+    /** Who is writing when the request's `_meta` envelope does not say (2025 clients). */
+    fallbackClient: string
+    log: Log
+  },
 ): void {
-  const { service, client, log } = options
+  const { service, fallbackClient, log } = options
   const run = (tool: string, operation: () => Promise<string>) => runTool({ tool, log }, operation)
+  const clientOf = (context: ServerContext) =>
+    clientFromEnvelope(context.mcpReq.envelope) ?? fallbackClient
 
   server.registerTool(
     'brief',
     {
       title: 'Load memory brief',
       description: TOOL_DESCRIPTIONS.brief,
-      inputSchema: briefShape,
+      inputSchema: briefSchema,
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
     },
-    (args) => run('brief', () => service.brief(args, client)),
+    (args, context) => run('brief', () => service.brief(args, clientOf(context))),
   )
   server.registerTool(
     'recall',
     {
       title: 'Recall memories',
       description: TOOL_DESCRIPTIONS.recall,
-      inputSchema: recallShape,
+      inputSchema: recallSchema,
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
     },
-    (args) => run('recall', () => service.recall(args, client)),
+    (args, context) => run('recall', () => service.recall(args, clientOf(context))),
   )
   server.registerTool(
     'memorize',
     {
       title: 'Memorize a fact',
       description: TOOL_DESCRIPTIONS.memorize,
-      inputSchema: memorizeShape,
+      inputSchema: memorizeSchema,
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -104,14 +111,14 @@ export function registerSatchelTools(
         openWorldHint: false,
       },
     },
-    (args) => run('memorize', () => service.memorize(args, client)),
+    (args, context) => run('memorize', () => service.memorize(args, clientOf(context))),
   )
   server.registerTool(
     'save_reference',
     {
       title: 'Save a reference',
       description: TOOL_DESCRIPTIONS.save_reference,
-      inputSchema: saveReferenceShape,
+      inputSchema: saveReferenceSchema,
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -119,24 +126,24 @@ export function registerSatchelTools(
         openWorldHint: false,
       },
     },
-    (args) => run('save_reference', () => service.saveReference(args, client)),
+    (args, context) => run('save_reference', () => service.saveReference(args, clientOf(context))),
   )
   server.registerTool(
     'read',
     {
       title: 'Read a reference',
       description: TOOL_DESCRIPTIONS.read,
-      inputSchema: readShape,
+      inputSchema: readSchema,
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
     },
-    (args) => run('read', () => service.read(args, client)),
+    (args, context) => run('read', () => service.read(args, clientOf(context))),
   )
   server.registerTool(
     'forget',
     {
       title: 'Forget a memory',
       description: TOOL_DESCRIPTIONS.forget,
-      inputSchema: forgetShape,
+      inputSchema: forgetSchema,
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,
@@ -144,14 +151,14 @@ export function registerSatchelTools(
         openWorldHint: false,
       },
     },
-    (args) => run('forget', () => service.forget(args, client)),
+    (args, context) => run('forget', () => service.forget(args, clientOf(context))),
   )
   server.registerTool(
     'checkpoint',
     {
       title: 'Save work checkpoint',
       description: TOOL_DESCRIPTIONS.checkpoint,
-      inputSchema: checkpointShape,
+      inputSchema: checkpointSchema,
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -159,6 +166,6 @@ export function registerSatchelTools(
         openWorldHint: false,
       },
     },
-    (args) => run('checkpoint', () => service.checkpoint(args, client)),
+    (args, context) => run('checkpoint', () => service.checkpoint(args, clientOf(context))),
   )
 }
