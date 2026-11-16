@@ -4,3 +4,4 @@ models/
 *.sqlite*
 .env
 .satchel-sandbox.json
+.worktrees/
