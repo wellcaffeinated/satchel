@@ -6,16 +6,23 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      SATCHEL_HOST: 0.0.0.0
-      SATCHEL_DATA: /data
+      # The owner of the files in ./data: run `id` on the host and use your own ids.
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      # Read from a secret instead of .env. SATCHEL_TOKEN must then be unset in .env.
+      # SATCHEL_TOKEN_FILE: /run/secrets/satchel_token
     ports:
       # Loopback only. Reach it from other machines through a tunnel or reverse proxy.
       - "127.0.0.1:8787:8787"
     volumes:
-      # Bind mount: easy to back up and to edit by hand. The directory must be writable by uid 1000.
+      # Your memories, and the only thing to back up. A bind mount, easy to copy and to
+      # edit by hand; the entrypoint makes it owned by PUID:PGID.
       - ${SATCHEL_DATA_DIR:-./data}:/data
-      # Or use a named volume instead: replace the line above with "satchel-data:/data"
-      # and uncomment the volumes block at the bottom.
+      # The embedding model cache. It re-downloads if lost, so it lives in a named volume
+      # outside the backup.
+      - satchel-models:/models
+    # secrets:
+    #   - satchel_token
 
   # Simplest tunnel: a cloudflared sidecar. Create a tunnel in Zero Trust, add a public
   # hostname pointing at http://satchel:8787, and put the tunnel token in .env.
@@ -29,5 +36,9 @@ services:
   #   depends_on:
   #     - satchel
 
-# volumes:
-#   satchel-data:
+volumes:
+  satchel-models:
+
+# secrets:
+#   satchel_token:
+#     file: ./secrets/satchel_token

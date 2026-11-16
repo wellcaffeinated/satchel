@@ -50,7 +50,22 @@ export const JSON_BODY_LIMIT_BYTES = 256 * 1024
 export const DEFAULT_PORT = 8787
 export const DEFAULT_HOST = '127.0.0.1'
 export const DEFAULT_DATA_DIR = './data'
+export const DEFAULT_MODELS_DIR = './models'
 export const DEFAULT_EMBED_MODEL = 'Xenova/bge-small-en-v1.5'
+
+// Every variable loadConfig reads; each may also come from a file (src/env-files.ts).
+export const CONFIG_VARIABLES = [
+  'SATCHEL_DATA',
+  'SATCHEL_MODELS',
+  'SATCHEL_HOST',
+  'SATCHEL_PORT',
+  'SATCHEL_EMBED_MODEL',
+  'SATCHEL_TIMEZONE',
+  'SATCHEL_TOKEN',
+  'SATCHEL_AUTH',
+  'CF_ACCESS_TEAM_DOMAIN',
+  'CF_ACCESS_AUD',
+] as const
 
 const MAX_PORT = 2 ** 16 - 1
 const HOSTNAME_LABEL = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?'
@@ -70,7 +85,8 @@ export interface AuthConfig {
 }
 
 export interface Config {
-  dataDir: string // absolute
+  dataDir: string // absolute; the memories, and all that needs backing up
+  modelsDir: string // absolute; embedding model cache, safe to lose
   host: string
   port: number
   embedModel: string // model id or "off"
@@ -157,6 +173,23 @@ export function isTimeZone(value: string): boolean {
   }
 }
 
+/**
+ * SATCHEL_TIMEZONE must be valid when set. Otherwise TZ (the usual container variable) is
+ * used if it names an IANA zone, since TZ may also hold a POSIX rule or a path Intl rejects.
+ */
+function parseTimeZone(env: Env): { timeZone: string; error?: string } {
+  const explicit = nonEmpty(env.SATCHEL_TIMEZONE)
+  if (explicit !== undefined && !isTimeZone(explicit)) {
+    return {
+      timeZone: DEFAULT_TIME_ZONE,
+      error: `SATCHEL_TIMEZONE must be an IANA zone name such as America/Toronto, not "${explicit}"`,
+    }
+  }
+  const fromTz = nonEmpty(env.TZ)
+  const inherited = fromTz !== undefined && isTimeZone(fromTz) ? fromTz : undefined
+  return { timeZone: explicit ?? inherited ?? DEFAULT_TIME_ZONE }
+}
+
 /** The token is kept byte for byte; only an all-blank value counts as unset. */
 function parseToken(env: Env): string | undefined {
   return nonEmpty(env.SATCHEL_TOKEN) === undefined ? undefined : env.SATCHEL_TOKEN
@@ -172,12 +205,8 @@ export function loadConfig(env: Env): ConfigResult {
   const { none, error: noneError } = parseNoneMode(env, host)
   if (noneError) return fail(noneError)
   const token = parseToken(env)
-  const timeZone = nonEmpty(env.SATCHEL_TIMEZONE) ?? DEFAULT_TIME_ZONE
-  if (!isTimeZone(timeZone)) {
-    return fail(
-      `SATCHEL_TIMEZONE must be an IANA zone name such as America/Toronto, not "${timeZone}"`,
-    )
-  }
+  const { timeZone, error: timeZoneError } = parseTimeZone(env)
+  if (timeZoneError) return fail(timeZoneError)
 
   if (!cfAccess && !token && !none) {
     return fail(
@@ -188,6 +217,7 @@ export function loadConfig(env: Env): ConfigResult {
 
   const config: Config = {
     dataDir: resolve(nonEmpty(env.SATCHEL_DATA) ?? DEFAULT_DATA_DIR),
+    modelsDir: resolve(nonEmpty(env.SATCHEL_MODELS) ?? DEFAULT_MODELS_DIR),
     host,
     port,
     embedModel: nonEmpty(env.SATCHEL_EMBED_MODEL) ?? DEFAULT_EMBED_MODEL,

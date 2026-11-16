@@ -2,13 +2,14 @@
 // seeded from fixtures/memories/. See docs/design.md, "Feedback loop for agents".
 import { type ChildProcess, spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
+import { CONFIG_VARIABLES } from '../src/config.ts'
 import { log } from '../src/log.ts'
 import { createGitRepo } from '../src/store/git-repo.ts'
 
@@ -18,7 +19,7 @@ export const SANDBOX_STATE_FILE = fileURLToPath(
 export const FIXTURES_DIR = fileURLToPath(new URL('../fixtures/memories', import.meta.url))
 const MAIN_PATH = fileURLToPath(new URL('../src/main.ts', import.meta.url))
 // Shared with `pnpm dev`, so the embedding model downloads once, not once per sandbox.
-const MODEL_CACHE_DIR = fileURLToPath(new URL('../data/models', import.meta.url))
+const MODELS_DIR = fileURLToPath(new URL('../models', import.meta.url))
 
 const LOOPBACK = '127.0.0.1'
 const TOKEN_BYTES = 16
@@ -56,11 +57,6 @@ export async function seedDataDir(options: { fixturesDir: string; dataDir: strin
   await repo.commit({ paths: ['.'], message: 'seed: fixtures/memories' })
 }
 
-async function linkModelCache(dataDir: string) {
-  await mkdir(MODEL_CACHE_DIR, { recursive: true })
-  await symlink(MODEL_CACHE_DIR, join(dataDir, 'models'), 'dir')
-}
-
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const probe = createServer()
@@ -75,8 +71,14 @@ function freePort(): Promise<number> {
 
 /** The server's environment: token auth on loopback only, whatever the caller's shell sets. */
 function serverEnv(options: { dataDir: string; port: number; token: string; embed: boolean }) {
+  const noFileVariables = CONFIG_VARIABLES.flatMap((name) => [
+    [`${name}_FILE`, ''],
+    [`FILE__${name}`, ''],
+  ])
   const overrides = Object.fromEntries([
+    ...noFileVariables,
     ['SATCHEL_DATA', options.dataDir],
+    ['SATCHEL_MODELS', MODELS_DIR],
     ['SATCHEL_HOST', LOOPBACK],
     ['SATCHEL_PORT', String(options.port)],
     ['SATCHEL_TOKEN', options.token],
@@ -120,7 +122,6 @@ async function stopChild(options: { child: ChildProcess; exited: Promise<number 
 export async function startSandbox(options: SandboxOptions): Promise<Sandbox> {
   const dataDir = await mkdtemp(join(tmpdir(), 'satchel-sandbox-'))
   await seedDataDir({ fixturesDir: options.fixturesDir, dataDir })
-  if (options.embed) await linkModelCache(dataDir)
 
   const port = await freePort()
   const token = randomBytes(TOKEN_BYTES).toString('hex')

@@ -49,7 +49,10 @@ const WATCH_DEBOUNCE_MS = 200
 const SIMILAR_LIMIT = 3
 
 export interface StoreOptions {
+  /** The memories: `repo/` and `index.sqlite`. Nothing else is written here. */
   dataDir: string
+  /** The embedding model cache, kept apart from the data so backups can skip it. */
+  modelsDir: string
   /** Hugging Face model id, or "off". */
   embedModel: string
   /** Replaces the Hugging Face loader; used by tests. */
@@ -110,6 +113,7 @@ function searchRequest(input: RecallInput) {
 export async function createStore(options: StoreOptions): Promise<SatchelStore> {
   const {
     dataDir,
+    modelsDir,
     embedModel,
     now = () => new Date(),
     timeZone = 'UTC',
@@ -129,7 +133,7 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
     embedModel === 'off'
       ? undefined
       : (options.embedderLoader ??
-        createHuggingFaceLoader({ model: embedModel, cacheDir: join(dataDir, 'models') }))
+        createHuggingFaceLoader({ model: embedModel, cacheDir: modelsDir }))
   const worker = createEmbeddingWorker({ index, model: embedModel, loader })
   const warnedHashes = new Map<string, string>()
 

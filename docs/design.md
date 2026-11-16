@@ -93,7 +93,8 @@ those files or that library. Up to 10 values per field, each at most 32 characte
 
 ## Data directory
 
-Everything lives under `SATCHEL_DATA` (default `./data`, `/data` in the container):
+The memories live under `SATCHEL_DATA` (default `./data`, `/data` in the container), and
+nothing else does: a backup of this directory is a backup of everything worth keeping.
 
 ```
 $SATCHEL_DATA/
@@ -104,8 +105,10 @@ $SATCHEL_DATA/
     references/<topic>/<slug>-<id>.md
     checkpoints/<context-slug>/<thread-slug>.md
   index.sqlite                rebuildable search index, plus the recall log
-  models/                     embedding model cache, downloaded on first run
 ```
+
+The embedding model cache lives apart, under `SATCHEL_MODELS` (default `./models`,
+`/models` in the container). It is downloaded on first run and safe to lose.
 
 The server creates `repo/` (with `git init`, an empty `core.md` and `topics.yaml`) on
 first start. Every write through the server is one git commit, authored as
@@ -378,7 +381,7 @@ Rules are meant to arrive when the work starts, not when the agent thinks to ask
   whole memory body and over reference titles and descriptions.
 - Embeddings: computed in-process with `@huggingface/transformers`. Model named by
   `SATCHEL_EMBED_MODEL` (default `Xenova/bge-small-en-v1.5`; `off` disables embeddings).
-  The model is downloaded on first use into `$SATCHEL_DATA/models`, never baked into
+  The model is downloaded on first use into `$SATCHEL_MODELS`, never baked into
   the image. The server must start and answer with full-text-only results while the
   model downloads, and whenever loading fails. A memory's vector embeds its first
   paragraph.
@@ -442,15 +445,27 @@ in `docs/plugin-oauth.md`.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `SATCHEL_DATA` | `./data` | Data directory |
+| `SATCHEL_DATA` | `./data` (`/data` in the container) | Data directory: the memories |
+| `SATCHEL_MODELS` | `./models` (`/models` in the container) | Embedding model cache |
 | `SATCHEL_HOST` | `127.0.0.1` (`0.0.0.0` in the container) | Bind address |
 | `SATCHEL_PORT` | `8787` | Port |
 | `SATCHEL_EMBED_MODEL` | `Xenova/bge-small-en-v1.5` | Embedding model, or `off` |
-| `SATCHEL_TIMEZONE` | `UTC` | IANA zone for dates in tool results, e.g. `America/Toronto` |
+| `SATCHEL_TIMEZONE` | `TZ` if it is an IANA zone, else `UTC` | IANA zone for dates in tool results, e.g. `America/Toronto` |
 | `SATCHEL_TOKEN` | unset | Static bearer token |
 | `CF_ACCESS_TEAM_DOMAIN` | unset | e.g. `example.cloudflareaccess.com` |
 | `CF_ACCESS_AUD` | unset | Access application audience tag |
 | `SATCHEL_AUTH` | unset | `none` to disable auth on loopback |
+
+Any variable in the table can instead be read from a file, for Docker and Compose secrets:
+set `NAME_FILE` (the official Docker images' convention) or `FILE__NAME` (LinuxServer.io's)
+to the file's path. Trailing newlines are dropped; the rest of the file is the value. Setting
+a variable both directly and from a file is a startup error. The list is `CONFIG_VARIABLES`
+in `src/config.ts`; other `*_FILE` variables in the environment are left alone.
+
+The container also reads `PUID`, `PGID` (default `1000`) and `UMASK` (default `022`) in
+`docker/entrypoint.sh`: it starts as root, gives the `node` user those ids, makes
+`SATCHEL_DATA` and `SATCHEL_MODELS` theirs, and runs the server as that user under `tini`.
+Started with `--user`, it skips all of that.
 
 ## Feedback loop for agents
 
@@ -466,7 +481,7 @@ the embedding model is cached. The first two are built (`scripts/`); `pnpm eval`
    random token, writes them to `.satchel-sandbox.json` (git-ignored) for `pnpm mcp`, and
    removes the directory and that file on exit. `--keep` leaves the directory for
    inspection. Embeddings are off unless `--embed`, which shares the model cache in
-   `./data/models` with `pnpm dev`.
+   `./models` with `pnpm dev`.
 2. **`pnpm mcp <tool> '<json args>'`**: a thin command-line MCP client built on the SDK.
    It connects to a running server (the sandbox by default; `--url` and `--token` for
    another one), prints the `instructions` it received with their character count, calls

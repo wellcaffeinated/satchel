@@ -19,13 +19,29 @@ directory" for Claude) at the time of writing.
 
 ## 1. Run the container
 
-Satchel is one container with one data directory. From a clone of this repository:
+Satchel is one container with two directories: `data/`, the memories, and a named volume
+for the embedding model. From a clone of this repository:
 
 ```bash
 cp .env.example .env
-mkdir -p data && sudo chown 1000:1000 data     # the image runs as uid 1000
 docker compose up -d --build
 ```
+
+The container follows LinuxServer.io conventions:
+
+| Variable | Default | Meaning |
+| -------- | ------- | ------- |
+| `PUID`, `PGID` | `1000` | Owner of the files in `data/`. Use your own: `id -u`, `id -g`. |
+| `UMASK` | `022` | Mode of new files |
+| `TZ` | `UTC` | Time zone for dates in tool results (`SATCHEL_TIMEZONE` overrides it) |
+
+The container starts as root only long enough to give `data/` and the model volume to
+`PUID:PGID`, then runs the server as that user. If you run it with `--user` (or `user:` in
+Compose) instead, it changes nothing and both mounts must already be writable by that user.
+
+Secrets can come from files rather than `.env`: set `SATCHEL_TOKEN_FILE` (or
+`FILE__SATCHEL_TOKEN`) to a path such as `/run/secrets/satchel_token`. This works for every
+`SATCHEL_*` and `CF_ACCESS_*` variable; `compose.yaml` has a commented example.
 
 To run the published image instead of building, set `image:` in `compose.yaml` to
 `ghcr.io/<owner>/<repo>:latest` (or a version tag such as `:0.2`), remove `build:`, and use
@@ -41,8 +57,8 @@ starts. Remove it again in step 3.
 `compose.yaml` publishes the port on `127.0.0.1:8787` only. Reach the server from elsewhere
 through a tunnel or reverse proxy (step 2), never by publishing the port publicly.
 
-The embedding model (`SATCHEL_EMBED_MODEL`, a few hundred MB) downloads into `data/models`
-on first use. The server answers with full-text search while it downloads. Set
+The embedding model (`SATCHEL_EMBED_MODEL`, a few hundred MB) downloads into the
+`satchel-models` volume (`/models`) on first use, never into `data/`. The server answers with full-text search while it downloads. Set
 `SATCHEL_EMBED_MODEL=off` to skip it entirely.
 
 Test:
@@ -229,7 +245,8 @@ of the options in `docs/plugin-oauth.md`, "Automatic options for later".
 
 ## 6. Back up the data directory
 
-Everything lives in the data directory (`./data`, mounted at `/data`):
+Back up `./data` (mounted at `/data`) and nothing else. It holds the memories and only the
+memories; the embedding model lives in its own volume and downloads again if lost.
 
 - `repo/` is a git repository and the source of truth. Every write through the server is a
   commit, so a copy of `repo/` alone is enough to rebuild everything else.
@@ -237,7 +254,6 @@ Everything lives in the data directory (`./data`, mounted at `/data`):
   the recall log (which memories were used, by whom) does not. Do not copy it with a plain
   file copy while the server runs, since a live SQLite file can be captured half-written.
   Use a filesystem snapshot, or stop the container first.
-- `models/` is the downloaded embedding model. Leave it out of backups.
 
 Test a backup:
 

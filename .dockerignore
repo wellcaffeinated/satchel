@@ -2,6 +2,7 @@
 .gitignore
 node_modules
 data
+models
 .env
 .env.*
 !.env.example

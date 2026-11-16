@@ -22,6 +22,7 @@ describe('store', () => {
   async function open(options: Partial<Parameters<typeof createStore>[0]> = {}) {
     const store = await createStore({
       dataDir: dataDir(),
+      modelsDir: join(temp.path, 'models'),
       embedModel: 'off',
       watchDebounceMs: 20,
       ...options,

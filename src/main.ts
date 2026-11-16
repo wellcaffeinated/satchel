@@ -1,8 +1,10 @@
 // Wiring and startup: config, store, app, listen, graceful shutdown.
+import { readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import type { Server } from 'node:http'
 import { createAuthMiddleware } from './auth/auth.ts'
-import { authModeNames, type Config, loadConfig } from './config.ts'
+import { authModeNames, CONFIG_VARIABLES, type Config, loadConfig } from './config.ts'
+import { resolveEnvFiles } from './env-files.ts'
 import { log } from './log.ts'
 import { createApp } from './server/app.ts'
 import { createStore } from './store/index.ts'
@@ -57,16 +59,28 @@ function installShutdown(options: { server: Server; store: Store }): void {
   }
 }
 
+function readSecretFile(path: string): string {
+  return readFileSync(path, 'utf8')
+}
+
+function configOrExit(): Config {
+  const files = resolveEnvFiles({
+    env: process.env,
+    names: CONFIG_VARIABLES,
+    readFile: readSecretFile,
+  })
+  const result = files.ok ? loadConfig(files.env) : files
+  if (result.ok) return result.config
+  log.error(`config: ${result.error}`)
+  process.exit(1)
+}
+
 async function main(): Promise<void> {
-  const result = loadConfig(process.env)
-  if (!result.ok) {
-    log.error(`config: ${result.error}`)
-    process.exit(1)
-  }
-  const { config } = result
+  const config = configOrExit()
 
   const store = await createStore({
     dataDir: config.dataDir,
+    modelsDir: config.modelsDir,
     embedModel: config.embedModel,
     timeZone: config.timeZone,
   })
@@ -86,7 +100,7 @@ async function main(): Promise<void> {
   installShutdown({ server, store })
 
   log.info(
-    `satchel listening on ${boundAddress(server, config)}, auth: ${authModeNames(config.auth).join(', ')}, data: ${config.dataDir}, embed: ${config.embedModel}`,
+    `satchel listening on ${boundAddress(server, config)}, auth: ${authModeNames(config.auth).join(', ')}, data: ${config.dataDir}, models: ${config.modelsDir}, embed: ${config.embedModel}`,
   )
 }
 

@@ -26,6 +26,8 @@ describe('loadConfig', () => {
     expect(config.port).toBe(8787)
     expect(config.embedModel).toBe('Xenova/bge-small-en-v1.5')
     expect(isAbsolute(config.dataDir)).toBe(true)
+    expect(isAbsolute(config.modelsDir)).toBe(true)
+    expect(config.modelsDir).not.toBe(config.dataDir)
     expect(config.auth).toEqual({ cfAccess: undefined, token: 'secret', none: false })
   })
 
@@ -35,12 +37,14 @@ describe('loadConfig', () => {
       SATCHEL_HOST: '0.0.0.0',
       SATCHEL_PORT: '9000',
       SATCHEL_DATA: '/srv/satchel',
+      SATCHEL_MODELS: '/var/cache/satchel',
       SATCHEL_EMBED_MODEL: 'off',
     })
     expect(config).toMatchObject({
       host: '0.0.0.0',
       port: 9000,
       dataDir: '/srv/satchel',
+      modelsDir: '/var/cache/satchel',
       embedModel: 'off',
     })
   })
@@ -53,6 +57,15 @@ describe('loadConfig', () => {
     expect(failure({ SATCHEL_TOKEN: 't', SATCHEL_TIMEZONE: 'Mars/Olympus' })).toMatch(
       /SATCHEL_TIMEZONE/,
     )
+  })
+
+  it('falls back to TZ for the time zone when it names an IANA zone', () => {
+    expect(loaded({ SATCHEL_TOKEN: 't', TZ: 'Europe/Lisbon' }).timeZone).toBe('Europe/Lisbon')
+    expect(
+      loaded({ SATCHEL_TOKEN: 't', TZ: 'Europe/Lisbon', SATCHEL_TIMEZONE: 'America/Toronto' })
+        .timeZone,
+    ).toBe('America/Toronto')
+    expect(loaded({ SATCHEL_TOKEN: 't', TZ: ':/etc/localtime' }).timeZone).toBe('UTC')
   })
 
   it('rejects a bad port', () => {

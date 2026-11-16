@@ -4,7 +4,7 @@ A self-hosted memory service for AI agents, served over MCP. One server holds on
 memories (plain Markdown files in a git repository, with a rebuildable search index) and
 serves them to any MCP client: Claude Code, claude.ai, Claude Desktop and mobile, Hermes.
 
-TypeScript on Node 24, pnpm. Runs as one Docker container with one data volume.
+TypeScript on Node 24, pnpm. Runs as one Docker container; the memories live in one data directory, apart from the model cache.
 
 ## Quick start (local development)
 
@@ -42,8 +42,11 @@ cp .env.example .env     # set an auth mode
 docker compose up -d --build
 ```
 
-The port is published on `127.0.0.1` only. See `compose.yaml` for the data volume and an
-optional cloudflared sidecar.
+The port is published on `127.0.0.1` only. The image follows LinuxServer.io conventions
+(`PUID`, `PGID`, `UMASK`, `TZ`), and any setting can come from a secret file
+(`SATCHEL_TOKEN_FILE` or `FILE__SATCHEL_TOKEN`). Back up `./data`; the embedding model sits in
+a separate volume. Details in [docs/deploy.md](docs/deploy.md); see `compose.yaml` for the
+volumes, secrets and an optional cloudflared sidecar.
 
 ## Docs
 
