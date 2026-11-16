@@ -1,4 +1,4 @@
 - Prefer pnpm over npm and yarn in JavaScript projects.
 - Answer briefly: lead with the answer, then the reasoning if it is needed.
 - Never commit, push or deploy without being asked.
-- Times are UTC unless stated otherwise.
+- Write dates as YYYY-MM-DD in anything written for the user.

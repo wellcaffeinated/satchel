@@ -109,10 +109,13 @@ curl -s https://TEAM/cdn-cgi/access/certs | head -c 80     # {"keys": ...
 CF_ACCESS_TEAM_DOMAIN=<TEAM>
 CF_ACCESS_AUD=<the AUD tag>
 SATCHEL_TOKEN=
+SATCHEL_TIMEZONE=America/Toronto
 ```
 
 Then `docker compose up -d`. In production, leave `SATCHEL_TOKEN` empty: every client signs
-in through OAuth.
+in through OAuth. Set `SATCHEL_TIMEZONE` to your own IANA zone (it defaults to `UTC`): dates
+in tool results are shown in it, and a memory that `expires` on a day lasts until that day
+ends there.
 
 ## 4. Turn on Managed OAuth
 
