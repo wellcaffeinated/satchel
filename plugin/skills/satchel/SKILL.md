@@ -59,6 +59,8 @@ Rules:
 - Name who or what it concerns in `about`, as `name` or `kind:name` (`person:alice`,
   `place:lisbon`, `project:garden-shed`). `recall` with `about` lists everything about them.
   Use `about` for people, places and things; use `tags` only for work that rules load for.
+- `core: true` pins a memory into the core every brief shows. Use it only when the user asks
+  for something to be kept in mind in every conversation; a scheduled job curates the rest.
 - Set `expires` on anything perishable (a plan, an offer, a temporary setup). Expired
   memories disappear from `recall` and the brief on their own.
 - Scope: `global` by default, and for anything not tied to one context or one machine.

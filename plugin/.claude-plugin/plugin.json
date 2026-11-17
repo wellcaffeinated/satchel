@@ -1,7 +1,7 @@
 {
   "name": "satchel",
   "displayName": "Satchel",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Use a Satchel memory server from Claude Code: MCP connection (OAuth), session-start brief prompt, commit checkpoints and a usage skill.",
   "author": { "name": "wellcaffeinated" },
   "license": "MIT",
