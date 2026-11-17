@@ -754,6 +754,30 @@ describe('store', () => {
       })
     })
 
+    it('moves an owner-made file that git never saw to another topic', async () => {
+      const store = await open()
+      await memorize(store, 'Seed fact.')
+      await memorize(store, 'Other seed.', { topic: 'typescript', topicTrigger: 'read before TS' })
+      const handmade = join(repoDir(), 'memories', 'general', 'handmade-m_abcdefgh.md')
+      writeFileSync(
+        handmade,
+        '---\nid: m_abcdefgh\ntopic: general\nscope: global\ncreated: 2026-01-01T00:00:00Z\nupdated: 2026-01-01T00:00:00Z\nsource: owner\n---\nPrefer satisfies over as.\n',
+      )
+      await vi.waitFor(async () => {
+        expect(await store.recall({ query: 'satisfies' })).toHaveLength(1)
+      })
+      const { memory } = await store.memorize({
+        replaces: 'm_abcdefgh',
+        topic: 'typescript',
+        filetypes: ['ts'],
+        source: 'test-client',
+      })
+      expect(memory.topic).toBe('typescript')
+      expect(existsSync(handmade)).toBe(false)
+      expect(git(repoDir(), 'status', '--porcelain', '--', 'memories')).toBe('')
+      expect(git(repoDir(), 'ls-files', 'memories/typescript')).toContain('m_abcdefgh.md')
+    })
+
     it('skips malformed files and keeps working', async () => {
       const first = await open()
       await memorize(first, 'Good fact about telescopes.')

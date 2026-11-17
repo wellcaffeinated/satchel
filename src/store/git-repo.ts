@@ -50,12 +50,23 @@ export function createGitRepo({ dir }: { dir: string }): GitRepo {
     )
   }
 
+  /**
+   * The paths git can stage: present on disk, or tracked (a deletion). An owner's direct
+   * edit is never committed, so when Satchel moves such a file the old path is unknown to
+   * git, and naming it would fail the whole commit.
+   */
+  async function stageablePaths(paths: string[]): Promise<string[]> {
+    const tracked = new Set((await git(['ls-files', '--', ...paths])).split('\n'))
+    return paths.filter((path) => existsSync(join(dir, path)) || tracked.has(path))
+  }
+
   async function commit({ paths, message }: { paths: string[]; message: string }) {
-    if (paths.length === 0) return
-    await git(['add', '-A', '--', ...paths])
-    const changed = await git(['status', '--porcelain', '--', ...paths])
+    const stageable = await stageablePaths(paths)
+    if (stageable.length === 0) return
+    await git(['add', '-A', '--', ...stageable])
+    const changed = await git(['status', '--porcelain', '--', ...stageable])
     if (changed.trim() === '') return
-    await git(['commit', '--no-verify', '-m', message, '--', ...paths])
+    await git(['commit', '--no-verify', '-m', message, '--', ...stageable])
   }
 
   async function ensureInitialised() {
