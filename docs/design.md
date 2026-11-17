@@ -438,8 +438,10 @@ relabel is left to its reader, the owner or a scheduled job. The overview ends w
 Satchel's rules for acting on it (`UPKEEP_RULES` in `src/server/review.ts`), the same for
 every owner: what belongs in the core, keeping it under 80% of the cap, at most 3 pin
 changes and 5 metadata fixes per run, duplicates reported but never merged, nothing
-forgotten. They tell the reader to recall the topic `memory-upkeep` first, where an
-owner's own adjustments live as memories and override them. Usage is measured over the last `USAGE_WINDOW_DAYS` (60) days
+forgotten, candidates checked against `core.md` and pinned memories. They tell the reader
+to recall the topic `memory-upkeep` first: stated memories there adjust how upkeep is done,
+but cannot lift the limits or allow forgetting. Memories in that topic are never core
+candidates. Usage is measured over the last `USAGE_WINDOW_DAYS` (60) days
 from the recall log, leaving out `core` showings. A memory's usage is the number of
 distinct days it was looked up (`recall`, `read`, or a row older than `via`) and the
 further days on which `brief` only loaded it for the work, plus the contexts that asked.

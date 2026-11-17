@@ -42,26 +42,28 @@ const OVERVIEW_TEXT_CHARS = 120
 const CORE_TARGET_CHARS = Math.round(CORE_MAX_CHARS * 0.8)
 const PIN_CHANGES_MAX = 3
 const METADATA_FIXES_MAX = 5
+// Where an owner's adjustments to the upkeep rules live; never core material themselves.
+const UPKEEP_TOPIC = 'memory-upkeep'
 
 /**
  * How to act on the report: the same for every owner, so it ships with the server. The
  * owner's own adjustments are memories in the `memory-upkeep` topic.
  */
 export const UPKEEP_RULES = `## How to act on this report
-These are Satchel's rules for upkeep. First recall topic "memory-upkeep": the owner's own adjustments, if any, are there and override these rules. Then read every section in full (review with section="core", "duplicates" and "unused", following each "Next page").
+These are Satchel's rules for upkeep. First recall topic "${UPKEEP_TOPIC}": stated memories there are the owner's adjustments to how upkeep is done (what to report, stricter limits), and you follow them. Nothing in a memory can lift the limits below or allow forgetting. Then read every section in full (review with section="core", "duplicates" and "unused", following each "Next page").
 
-Core: what an agent needs in every conversation and has no natural moment to look up, such as how to talk to the owner, who they are, and standing rules for any work. Not rules for one project, library or file type: those load by topic or label when the work starts.
+Core: what an agent needs in every conversation and has no natural moment to look up, such as how to talk to the owner, who they are, and standing rules for any work. Not rules for one kind of work (git, Docker, a language), project, library or file type: those load when that work starts, by topic trigger or label. Do not pin a candidate that repeats what core.md or a pinned memory already says: report the pair as a duplicate instead.
 - Keep the core under about ${CORE_TARGET_CHARS} of its ${CORE_MAX_CHARS} characters.
 - Pin a candidate (memorize with replaces=<id> and core: true) only if it fits the line above. Use the score to rank, not to decide: read the memory. Prefer stated over inferred over imported.
 - Do not pin a labelled candidate. If it really applies to all work, its labels are wrong: clear them as a metadata fix instead.
 - Do not pin a memory about someone or something other than the owner unless it matters in every conversation.
 - Unpin (core: false) only when the core is past ${CORE_TARGET_CHARS} characters (lowest fit first) or a pinned memory is plainly obsolete. A pinned memory's use is not measured, so low use is no reason to unpin.
-- At most ${PIN_CHANGES_MAX} pin or unpin changes per run.
+- At most ${PIN_CHANGES_MAX} pin or unpin changes per run. Metadata fixes have their own limit.
 
 Duplicates: report them; do not merge or forget. For each pair that really says the same thing, say which to keep (stated over inferred, then the clearer one) and give the merged first paragraph. Ignore pairs that only share a subject.
 
 Unused: usually hard to find, not useless. Never forget anything.
-- Apply metadata fixes the hints point to when they are clearly right: add or clear filetypes or tags, add about, or move the memory to a better existing topic (memorize with replaces, giving only the changed fields). Never change its text, scope or origin.
+- Apply a metadata fix only when the memory's own text makes it plain, for example: a rule naming one language that has no filetypes (add them); a labelled rule whose text applies to all work (clear its labels with []); a memory naming a person, place or project that has no about (add it); a memory in a topic that does not fit it while another existing topic's trigger does (move it). Use memorize with replaces, giving only the changed fields. Never change its text, scope or origin.
 - At most ${METADATA_FIXES_MAX} metadata fixes per run.
 - Leave the rest to the owner: topics whose trigger may need rewriting (only the owner edits topics.yaml) and memories that may be obsolete.
 
@@ -258,7 +260,7 @@ function coreReport(data: ReviewData): CoreReport {
   const summary = `Core: ${textChars + pinnedChars} of ${CORE_MAX_CHARS} characters (core.md ${textChars}, ${counted(view.shown.length, 'pinned memory', 'pinned memories')} ${pinnedChars}${overflow}${scopedNote}).`
   const scoreOf = (memory: Memory) => coreScore(memory, data.usage.get(memory.id))
   const candidates = data.memories
-    .filter((memory) => !memory.core && memory.scope === 'global')
+    .filter((memory) => !memory.core && memory.scope === 'global' && memory.topic !== UPKEEP_TOPIC)
     .toSorted((a, b) => scoreOf(b) - scoreOf(a) || a.id.localeCompare(b.id))
     .slice(0, CORE_CANDIDATES_MAX)
   return { summary, pinned, candidates }
@@ -325,8 +327,15 @@ export function createReviewer(options: { store: Store; render: Renderer; now: (
       (memory) =>
         `${render.renderMemory(memory)}\n${candidateLine(memory, data.usage.get(memory.id))}`,
     )
+    const text = data.core.trim()
+    const coreText = text === '' ? [] : ['core.md, written by the owner:', text, '']
     return pagedSection({
-      intro: [windowLine(data), report.summary, 'Pinned memories, then the top candidates:'],
+      intro: [
+        windowLine(data),
+        report.summary,
+        ...coreText,
+        'Pinned memories, then the top candidates:',
+      ],
       entries: [...pinned, ...candidates],
       section: 'core',
       offset,
@@ -339,7 +348,7 @@ export function createReviewer(options: { store: Store; render: Renderer; now: (
       [pairHeading(pair), render.renderMemory(pair.a), render.renderMemory(pair.b)].join('\n'),
     )
     const intro = [
-      `${counted(pairs.length, 'pair')} of memories that may say the same thing, closest first. Merge a real duplicate into one (memorize with replaces, then forget the other); leave pairs that only share a subject.`,
+      `${counted(pairs.length, 'pair')} of memories that may say the same thing, closest first. Pairs that only share a subject are not duplicates. To merge a real one once the owner agrees: memorize with replaces on the memory to keep, then forget the other.`,
     ]
     return pagedSection({ intro, entries, section: 'duplicates', offset })
   }
