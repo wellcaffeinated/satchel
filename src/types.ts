@@ -150,9 +150,10 @@ export interface RecallInput {
 
 /**
  * How a memory reached a client, for the recall log: shown in the core, loaded by `brief`
- * for the work or entities it described, returned by `recall`, or fetched with `read`.
+ * for the work or entities it described, listed by `recall` (a topic, entity, label, kind or
+ * machine), returned by a `recall` search, or fetched with `read`.
  */
-export type RecallVia = 'core' | 'loaded' | 'recall' | 'read'
+export type RecallVia = 'core' | 'loaded' | 'recall' | 'search' | 'read'
 
 export interface RecallLogInput {
   ids: string[]
@@ -162,10 +163,10 @@ export interface RecallLogInput {
   context?: string
 }
 
-/** How one memory was used since some time, leaving out showings in the core. */
+/** How one memory was used since some time, leaving out core showings and search results. */
 export interface MemoryUsage {
   id: string
-  /** Days with at least one `recall` or `read` of it (or a log entry older than `via`). */
+  /** Days with at least one `recall` listing or `read` of it (or a log entry older than `via`). */
   lookupDays: number
   /** Days on which `brief` loaded it for the work, and nothing looked it up. */
   loadOnlyDays: number
@@ -235,7 +236,7 @@ export interface Store {
   pinned(input: { context?: string; host?: string }): Promise<Memory[]>
   /** Every live memory, by topic then creation. */
   liveMemories(): Promise<Memory[]>
-  /** Usage since `since` (ISO 8601) of each memory used at all, core showings left out. */
+  /** Usage since `since` (ISO 8601) of each memory used at all; core and search left out. */
   usage(input: { since: string }): Promise<MemoryUsage[]>
   /** Contexts any client named in a logged call since `since`. */
   activeContexts(input: { since: string }): Promise<string[]>

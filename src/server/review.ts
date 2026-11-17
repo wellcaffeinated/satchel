@@ -317,7 +317,7 @@ export function createReviewer(options: { store: Store; render: Renderer; now: (
   }
 
   function windowLine(data: ReviewData): string {
-    return `Usage counts the last ${USAGE_WINDOW_DAYS} days (since ${day(data.since)}); showings in the core are not counted.`
+    return `Usage counts the last ${USAGE_WINDOW_DAYS} days (since ${day(data.since)}); showings in the core and search results are not counted.`
   }
 
   function coreSection(data: ReviewData, offset: number): string {

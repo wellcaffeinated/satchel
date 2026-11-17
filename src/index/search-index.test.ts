@@ -189,6 +189,7 @@ describe('search index', () => {
       index.logRecall({ ids: ['m_aaaaaaaa'], client: 'c', via: 'recall', context: 'repo' })
       index.logRecall({ ids: ['m_aaaaaaaa'], client: 'c', via: 'loaded', context: 'repo' })
       index.logRecall({ ids: ['m_bbbbbbbb'], client: 'c', via: 'core', context: 'repo' })
+      index.logRecall({ ids: ['m_cccccccc'], client: 'c', via: 'search', context: 'repo' })
       clock.now = new Date('2026-11-11T09:00:00Z')
       index.logRecall({ ids: ['m_aaaaaaaa'], client: 'c', via: 'loaded', context: 'other' })
       index.logRecall({ ids: ['m_aaaaaaaa'], client: 'c', via: 'read' })

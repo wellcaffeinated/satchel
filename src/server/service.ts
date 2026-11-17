@@ -290,7 +290,7 @@ export function createSatchelService(options: {
     await store.logRecall({
       ids: page.items.map((memory) => memory.id),
       client,
-      via: 'recall',
+      via: args.query === undefined ? 'recall' : 'search',
       context: args.context,
     })
     const shown = page.items.length === 0 ? [] : [render.renderMemories(page.items)]

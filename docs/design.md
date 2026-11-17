@@ -409,7 +409,8 @@ a rebuild.
 
 `recall_log(memory_id, ts, client, via, context)` has one row per memory shown to a client.
 `via` says how: `core` (shown in the brief's core), `loaded` (loaded by `brief` for the
-work or entities it described), `recall`, or `read`. `context` is the caller's context
+work or entities it described), `recall` (a listing: by topic, entity, label, kind or
+machine), `search` (a `recall` with `query`), or `read`. `context` is the caller's context
 when it gave one. Rows written before `via` and `context` existed hold NULL there; they
 count as lookups. `review` reads the log; nothing else does.
 
@@ -442,9 +443,11 @@ forgotten, candidates checked against `core.md` and pinned memories. They tell t
 to recall the topic `memory-upkeep` first: stated memories there adjust how upkeep is done,
 but cannot lift the limits or allow forgetting. Memories in that topic are never core
 candidates. Usage is measured over the last `USAGE_WINDOW_DAYS` (60) days
-from the recall log, leaving out `core` showings. A memory's usage is the number of
-distinct days it was looked up (`recall`, `read`, or a row older than `via`) and the
-further days on which `brief` only loaded it for the work, plus the contexts that asked.
+from the recall log, leaving out `core` showings and `search` results: a search fills its
+page with loose matches, so appearing in one is not use. A memory's usage is the number of
+distinct days it was looked up (a `recall` listing, `read`, or a row older than `via`) and
+the further days on which `brief` only loaded it for the work, plus the contexts that
+asked.
 
 **Core section.** The size line (`core.md` and pinned characters against the cap, pinned
 memories past the limit, pinned memories scoped to one context or machine), every pinned

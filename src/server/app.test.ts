@@ -200,6 +200,13 @@ describe.each(['modern', 'legacy'] as const)('MCP over Streamable HTTP, %s era',
       via: 'recall',
       context: undefined,
     })
+    await client().callTool({ name: 'recall', arguments: { query: 'getter', context: 'p' } })
+    expect(harness().store.recallLog).toContainEqual({
+      id: 'm_aaaaaaaa',
+      client: 'test-client',
+      via: 'search',
+      context: 'p',
+    })
   })
 
   it('recall without query or topic is an error result', async () => {

@@ -171,7 +171,10 @@ export interface SearchIndex {
   pinned(input: { context?: string; host?: string }): Memory[]
   /** Every live memory, by topic then creation. */
   liveMemories(): Memory[]
-  /** Usage since `since`, core showings left out; only memories used at all. */
+  /**
+   * Usage since `since`; only memories used at all. Core showings and search results are
+   * left out: a search returns loose matches, so appearing in one says little about use.
+   */
   usage(since: string): MemoryUsage[]
   /** Contexts named in logged calls since `since`. */
   activeContexts(since: string): string[]
@@ -1031,7 +1034,7 @@ export function createSearchIndex({
     usage(since) {
       const rows = all(
         `SELECT memory_id, ts, via, context FROM recall_log
-         WHERE ts >= ? AND (via IS NULL OR via != 'core')`,
+         WHERE ts >= ? AND (via IS NULL OR via NOT IN ('core', 'search'))`,
         [since],
       )
       return summariseUsage(rows)
