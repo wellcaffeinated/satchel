@@ -60,11 +60,13 @@ Core: what an agent needs in every conversation and has no natural moment to loo
 - Unpin (core: false) only when the core is past ${CORE_TARGET_CHARS} characters (lowest fit first) or a pinned memory is plainly obsolete. A pinned memory's use is not measured, so low use is no reason to unpin.
 - At most ${PIN_CHANGES_MAX} pin or unpin changes per run. Metadata fixes have their own limit.
 
+Contradictions: when a memory contradicts core.md or a pinned memory, change neither; report both ids for the owner to decide.
+
 Duplicates: report them; do not merge or forget. For each pair that really says the same thing, say which to keep (stated over inferred, then the clearer one) and give the merged first paragraph. Ignore pairs that only share a subject.
 
 Unused: usually hard to find, not useless. Never forget anything.
-- Apply a metadata fix only when the memory's own text makes it plain, for example: a rule naming one language that has no filetypes (add them); a labelled rule whose text applies to all work (clear its labels with []); a memory naming a person, place or project that has no about (add it); a memory in a topic that does not fit it while another existing topic's trigger does (move it). Use memorize with replaces, giving only the changed fields. Never change its text, scope or origin.
-- At most ${METADATA_FIXES_MAX} metadata fixes per run.
+- Apply a metadata fix only when the memory's own text makes it plain, for example: a rule naming one language that has no filetypes (add them); a labelled rule whose text applies to any work, not only code (clear its labels with []); a memory naming a person, place or project that has no about (add it); a memory in a topic that does not fit it while another existing topic's trigger does (move it). Use memorize with replaces, giving only the changed fields. Never change its text, scope or origin.
+- At most ${METADATA_FIXES_MAX} metadata fixes per run; one memorize call is one fix.
 - Leave the rest to the owner: topics whose trigger may need rewriting (only the owner edits topics.yaml) and memories that may be obsolete.
 
 Report to the owner in plain sentences: what changed (each id with a one-line reason); what needs them, as a numbered list; and any failure, said plainly. If nothing changed and nothing needs them, say so in one line.`
