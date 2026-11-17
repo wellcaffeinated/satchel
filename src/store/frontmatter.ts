@@ -63,3 +63,8 @@ export function optionalString(data: Record<string, unknown>, key: string): stri
   if (typeof value === 'number') return String(value)
   return undefined
 }
+
+/** True only for a YAML `true`; anything else, absent included, is false. */
+export function optionalFlag(data: Record<string, unknown>, key: string): boolean {
+  return data[key] === true
+}

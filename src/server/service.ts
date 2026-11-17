@@ -4,6 +4,7 @@ import {
   ABOUT_PATTERN,
   BRIEF_LOADED_MAX_CHARS,
   CONTEXT_MAX_CHARS,
+  CORE_MAX_CHARS,
   DEFAULT_THREAD,
   DEFAULT_TIME_ZONE,
   FILETYPE_PATTERN,
@@ -18,6 +19,7 @@ import { type Page, pageOf } from './paging.ts'
 import {
   checkpointCommit,
   createRenderer,
+  fitCore,
   type LoadedAbout,
   type LoadedForWork,
   recallFooter,
@@ -25,6 +27,7 @@ import {
   renderReferenceList,
   type WorkLabels,
 } from './render.ts'
+import { createReviewer } from './review.ts'
 import type {
   BriefArgs,
   CheckpointArgs,
@@ -32,6 +35,7 @@ import type {
   MemorizeArgs,
   ReadArgs,
   RecallArgs,
+  ReviewArgs,
   SaveReferenceArgs,
 } from './schemas.ts'
 import { flattenLine } from './text.ts'
@@ -46,6 +50,7 @@ export interface SatchelService {
   read(args: ReadArgs, client: string): Promise<string>
   forget(args: ForgetArgs, client: string): Promise<string>
   checkpoint(args: CheckpointArgs, client: string): Promise<string>
+  review(args: ReviewArgs): Promise<string>
 }
 
 type ScopedArgs = Pick<MemorizeArgs, 'scope' | 'context' | 'host'>
@@ -145,9 +150,14 @@ function describeForgotten(gone: Forgotten): string {
   return describers[gone.kind]()
 }
 
-export function createSatchelService(options: { store: Store; timeZone?: string }): SatchelService {
-  const { store, timeZone = DEFAULT_TIME_ZONE } = options
+export function createSatchelService(options: {
+  store: Store
+  timeZone?: string
+  now?: () => Date
+}): SatchelService {
+  const { store, timeZone = DEFAULT_TIME_ZONE, now = () => new Date() } = options
   const render = createRenderer({ timeZone })
+  const reviewer = createReviewer({ store, render, now })
 
   /** Size of a memory as recall prints it, newline included. */
   function renderedSize(memory: Memory): number {
@@ -168,8 +178,29 @@ export function createSatchelService(options: { store: Store; timeZone?: string 
       maxChars: BRIEF_LOADED_MAX_CHARS,
       size: renderedSize,
     })
-    await store.logRecall({ ids: page.items.map((memory) => memory.id), client })
+    await store.logRecall({
+      ids: page.items.map((memory) => memory.id),
+      client,
+      via: 'loaded',
+      context: request.context,
+    })
     return { page, references }
+  }
+
+  /** core.md and the pinned memories the caller can see, cut to the core's size. */
+  async function coreFor(args: BriefArgs, client: string) {
+    const [text, pinned] = await Promise.all([
+      store.core(),
+      store.pinned({ context: args.context, host: args.host }),
+    ])
+    const view = fitCore({ text, pinned, maxChars: CORE_MAX_CHARS })
+    await store.logRecall({
+      ids: view.shown.map((memory) => memory.id),
+      client,
+      via: 'core',
+      context: args.context,
+    })
+    return view
   }
 
   async function loadedForWork(
@@ -193,7 +224,7 @@ export function createSatchelService(options: { store: Store; timeZone?: string 
     const { context, thread } = args
     const [core, topics, hosts, labels, loaded, about, checkpoints, recent, contextMemoryCount] =
       await Promise.all([
-        store.core(),
+        coreFor(args, client),
         store.topics(),
         store.hosts(),
         store.labels(),
@@ -256,7 +287,12 @@ export function createSatchelService(options: { store: Store; timeZone?: string 
       maxChars: RECALL_PAGE_MAX_CHARS,
       size: renderedSize,
     })
-    await store.logRecall({ ids: page.items.map((memory) => memory.id), client })
+    await store.logRecall({
+      ids: page.items.map((memory) => memory.id),
+      client,
+      via: 'recall',
+      context: args.context,
+    })
     const shown = page.items.length === 0 ? [] : [render.renderMemories(page.items)]
     return [...shown, ...recallFooter(page), ...referenceLines].join('\n')
   }
@@ -288,7 +324,7 @@ export function createSatchelService(options: { store: Store; timeZone?: string 
   async function read(args: ReadArgs, client: string): Promise<string> {
     const found = await store.read(args.id)
     if (found.kind === 'reference') return render.renderReference(found.reference)
-    await store.logRecall({ ids: [found.memory.id], client })
+    await store.logRecall({ ids: [found.memory.id], client, via: 'read' })
     return render.renderMemory(found.memory)
   }
 
@@ -317,6 +353,7 @@ export function createSatchelService(options: { store: Store; timeZone?: string 
       host: args.host,
       filetypes: args.filetypes,
       tags: args.tags,
+      core: args.core,
       topicTrigger: args.topic_trigger,
       replaces: args.replaces,
       source: client,
@@ -360,5 +397,14 @@ export function createSatchelService(options: { store: Store; timeZone?: string 
     return `Checkpoint ${saved.id} ${verb} for ${threadLabel(saved.context, saved.thread)}${at}${kept}.`
   }
 
-  return { brief, recall, memorize, saveReference, read, forget, checkpoint }
+  return {
+    brief,
+    recall,
+    memorize,
+    saveReference,
+    read,
+    forget,
+    checkpoint,
+    review: reviewer.review,
+  }
 }

@@ -134,7 +134,7 @@ describe('search index', () => {
   it('keeps recall_log across a rebuild and empties the index tables', () => {
     const index = create()
     add(index, memory('m_aaaaaaaa', 'alpha'))
-    index.logRecall({ ids: ['m_aaaaaaaa'], client: 'c' })
+    index.logRecall({ ids: ['m_aaaaaaaa'], client: 'c', via: 'recall' })
     index.rebuild()
     expect(index.search({ query: 'alpha', limit: 5 })).toEqual([])
     expect(index.fileHashes().size).toBe(0)
@@ -142,6 +142,110 @@ describe('search index', () => {
     const db = new DatabaseSync(dbPath(), { readOnly: true })
     expect(db.prepare('SELECT count(*) AS n FROM recall_log').get()?.n).toBe(1)
     db.close()
+  })
+
+  describe('pinned memories', () => {
+    it('keeps the core flag and lists only what the caller may see', () => {
+      const index = create()
+      add(index, memory('m_aaaaaaaa', 'global pin', { core: true, topic: 'b' }))
+      add(index, memory('m_bbbbbbbb', 'not pinned'))
+      add(
+        index,
+        memory('m_cccccccc', 'repo pin', {
+          core: true,
+          scope: 'context',
+          context: 'repo',
+          topic: 'a',
+        }),
+      )
+      add(index, memory('m_dddddddd', 'nas pin', { core: true, scope: 'host', host: 'nas' }))
+      expect(index.getMemory('m_aaaaaaaa')?.core).toBe(true)
+      expect(index.getMemory('m_bbbbbbbb')?.core).toBeUndefined()
+      expect(index.pinned({}).map((m) => m.id)).toEqual(['m_aaaaaaaa'])
+      expect(index.pinned({ context: 'repo', host: 'nas' }).map((m) => m.id)).toEqual([
+        'm_cccccccc',
+        'm_aaaaaaaa',
+        'm_dddddddd',
+      ])
+    })
+
+    it('leaves expired pinned memories out', () => {
+      const index = create()
+      add(index, memory('m_aaaaaaaa', 'old pin', { core: true, expires: '2000-01-01T00:00:00Z' }))
+      expect(index.pinned({})).toEqual([])
+    })
+  })
+
+  describe('usage', () => {
+    function createAt(clock: { now: Date }): SearchIndex {
+      const index = createSearchIndex({ path: dbPath(), now: () => clock.now })
+      open.push(index)
+      return index
+    }
+
+    it('counts days of lookups and of loads, contexts, and leaves core showings out', () => {
+      const clock = { now: new Date('2026-11-10T09:00:00Z') }
+      const index = createAt(clock)
+      index.logRecall({ ids: ['m_aaaaaaaa'], client: 'c', via: 'recall', context: 'repo' })
+      index.logRecall({ ids: ['m_aaaaaaaa'], client: 'c', via: 'loaded', context: 'repo' })
+      index.logRecall({ ids: ['m_bbbbbbbb'], client: 'c', via: 'core', context: 'repo' })
+      clock.now = new Date('2026-11-11T09:00:00Z')
+      index.logRecall({ ids: ['m_aaaaaaaa'], client: 'c', via: 'loaded', context: 'other' })
+      index.logRecall({ ids: ['m_aaaaaaaa'], client: 'c', via: 'read' })
+      clock.now = new Date('2026-11-12T09:00:00Z')
+      index.logRecall({ ids: ['m_aaaaaaaa'], client: 'c', via: 'loaded' })
+      expect(index.usage('2026-11-01T00:00:00Z')).toEqual([
+        {
+          id: 'm_aaaaaaaa',
+          lookupDays: 2,
+          loadOnlyDays: 1,
+          contexts: ['other', 'repo'],
+          lastUsed: '2026-11-12T09:00:00.000Z',
+        },
+      ])
+      expect(index.usage('2026-11-11T00:00:00Z')[0]?.lookupDays).toBe(1)
+      expect(index.activeContexts('2026-11-01T00:00:00Z')).toEqual(['other', 'repo'])
+      expect(index.activeContexts('2026-11-11T00:00:00Z')).toEqual(['other'])
+    })
+
+    it('adds the newer columns to an older log and counts its rows as lookups', () => {
+      const db = new DatabaseSync(dbPath())
+      db.exec(
+        'CREATE TABLE recall_log(memory_id TEXT NOT NULL, ts TEXT NOT NULL, client TEXT NOT NULL)',
+      )
+      db.prepare('INSERT INTO recall_log VALUES (?, ?, ?)').run(
+        'm_aaaaaaaa',
+        '2026-11-05T10:00:00.000Z',
+        'old-client',
+      )
+      db.close()
+      const index = createAt({ now: new Date('2026-11-10T09:00:00Z') })
+      index.logRecall({ ids: ['m_bbbbbbbb'], client: 'c', via: 'recall', context: 'repo' })
+      expect(index.usage('2026-11-01T00:00:00Z').map((u) => [u.id, u.lookupDays])).toEqual([
+        ['m_aaaaaaaa', 1],
+        ['m_bbbbbbbb', 1],
+      ])
+    })
+  })
+
+  it('pairs memories whose vectors are close, closest first', () => {
+    const index = create()
+    add(index, memory('m_aaaaaaaa', 'alpha'))
+    add(index, memory('m_bbbbbbbb', 'alpha again'))
+    add(index, memory('m_cccccccc', 'beta'))
+    const vectors: [string, number[]][] = [
+      ['m_aaaaaaaa', [1, 0]],
+      ['m_bbbbbbbb', [0.95, 0.05]],
+      ['m_cccccccc', [0, 1]],
+    ]
+    for (const [id, vector] of vectors) {
+      const textHash = hashText(index.getMemory(id)?.text ?? '')
+      index.setVector({ id, model: 'm', textHash, vector: Float32Array.from(vector) })
+    }
+    const pairs = index.vectorPairs({ model: 'm', minScore: 0.9 })
+    expect(pairs.map((pair) => [pair.a, pair.b])).toEqual([['m_aaaaaaaa', 'm_bbbbbbbb']])
+    expect(pairs[0]?.score).toBeGreaterThan(0.99)
+    expect(index.vectorPairs({ model: 'other', minScore: 0.9 })).toEqual([])
   })
 
   it('rejects a second file claiming an existing id', () => {

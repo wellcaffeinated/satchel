@@ -8,11 +8,14 @@ import {
   type Labels,
   type MemorizeInput,
   type Memory,
+  type MemoryUsage,
   type RecallInput,
+  type RecallLogInput,
   type Reference,
   type ReferenceSummary,
   SatchelError,
   type SaveReferenceInput,
+  type SimilarPair,
   type Store,
   type Topic,
 } from '../types.ts'
@@ -26,10 +29,18 @@ export interface FakeStoreSeed {
   memories?: Memory[]
   references?: Reference[]
   checkpoints?: Checkpoint[]
+  /** What `usage` reports, whatever the window. */
+  usage?: MemoryUsage[]
+  /** What `activeContexts` reports, whatever the window. */
+  activeContexts?: string[]
+  /** Pairs `similarPairs` reports, by memory id. */
+  similarPairs?: Array<{ a: string; b: string; score: number }>
 }
 
+export type FakeRecallLogEntry = Omit<RecallLogInput, 'ids'> & { id: string }
+
 export interface FakeStore extends Store {
-  readonly recallLog: Array<{ id: string; client: string }>
+  readonly recallLog: FakeRecallLogEntry[]
   readonly memories: Map<string, Memory>
   readonly references: Map<string, Reference>
   readonly checkpointsByKey: Map<string, Checkpoint>
@@ -105,7 +116,7 @@ export function createFakeStore(seed: FakeStoreSeed = {}): FakeStore {
   const checkpointsByKey = new Map(
     (seed.checkpoints ?? []).map((c) => [checkpointKey(c.context, c.thread), c]),
   )
-  const recallLog: Array<{ id: string; client: string }> = []
+  const recallLog: FakeRecallLogEntry[] = []
   const nextMemoryId = idGenerator('m')
   const nextCheckpointId = idGenerator('c')
   const state = { closed: false }
@@ -212,8 +223,28 @@ export function createFakeStore(seed: FakeStoreSeed = {}): FakeStore {
     throw new SatchelError('not_found', `No memory or reference ${id}.`)
   }
 
-  async function logRecall(input: { ids: string[]; client: string }) {
-    recallLog.push(...input.ids.map((id) => ({ id, client: input.client })))
+  async function logRecall({ ids, ...entry }: RecallLogInput) {
+    recallLog.push(...ids.map((id) => ({ id, ...entry })))
+  }
+
+  const byTopicThenCreated = (a: Memory, b: Memory) =>
+    a.topic.localeCompare(b.topic) || a.created.localeCompare(b.created) || a.id.localeCompare(b.id)
+
+  async function pinned(filter: { context?: string; host?: string }): Promise<Memory[]> {
+    const visible = (m: Memory) =>
+      (m.scope !== 'context' || m.context === filter.context) &&
+      (m.scope !== 'host' || m.host === filter.host)
+    return live()
+      .filter((m) => m.core === true && visible(m))
+      .toSorted(byTopicThenCreated)
+  }
+
+  async function similarPairs(): Promise<SimilarPair[]> {
+    return (seed.similarPairs ?? []).flatMap((pair) => {
+      const a = memories.get(pair.a)
+      const b = memories.get(pair.b)
+      return a && b ? [{ a, b, score: pair.score, method: 'vector' as const }] : []
+    })
   }
 
   async function labels(): Promise<Labels> {
@@ -259,6 +290,7 @@ export function createFakeStore(seed: FakeStoreSeed = {}): FakeStore {
       ...listField('filetypes', merged.filetypes),
       ...listField('tags', merged.tags),
       ...listField('about', merged.about),
+      ...(merged.core ? { core: true as const } : {}),
       created: previous?.created ?? FIXED_TIME,
       updated: FIXED_TIME,
       source: input.source,
@@ -348,6 +380,11 @@ export function createFakeStore(seed: FakeStoreSeed = {}): FakeStore {
     saveReference,
     read,
     logRecall,
+    pinned,
+    liveMemories: async () => live().toSorted(byTopicThenCreated),
+    usage: async () => seed.usage ?? [],
+    activeContexts: async () => seed.activeContexts ?? [],
+    similarPairs,
     labels,
     memorize,
     forget,

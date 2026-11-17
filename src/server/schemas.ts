@@ -220,6 +220,12 @@ export const memorizeShape = {
     .describe(
       'Only if the rule applies only to this kind of work: ["code"] for any code, a library name such as ["rxjs"], an activity such as ["testing"]',
     ),
+  core: z
+    .boolean()
+    .optional()
+    .describe(
+      'true pins it into the core every brief shows: only for a standing fact or preference that matters in every conversation. false unpins it',
+    ),
   // biome-ignore lint/style/useNamingConvention: tool argument name fixed by docs/design.md
   topic_trigger: z
     .string()
@@ -313,6 +319,21 @@ export const checkpointShape = {
     .describe('true deletes the checkpoint (thread merged, finished or abandoned)'),
 }
 
+export const reviewShape = {
+  section: z
+    .enum(['core', 'duplicates', 'unused'])
+    .optional()
+    .describe(
+      'One section in full: core (pinned memories and scored candidates), duplicates (pairs that may say the same thing) or unused (memories nothing has used lately, with hints). Omit for an overview of all three',
+    ),
+  offset: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe('Where the page starts; use the value a previous page ended with'),
+}
+
 export const briefSchema = z.object(briefShape)
 export const recallSchema = z.object(recallShape)
 export const memorizeSchema = z.object(memorizeShape)
@@ -320,6 +341,7 @@ export const forgetSchema = z.object(forgetShape)
 export const readSchema = z.object(readShape)
 export const saveReferenceSchema = z.object(saveReferenceShape)
 export const checkpointSchema = z.object(checkpointShape)
+export const reviewSchema = z.object(reviewShape)
 
 export type BriefArgs = z.infer<typeof briefSchema>
 export type RecallArgs = z.infer<typeof recallSchema>
@@ -328,3 +350,4 @@ export type ForgetArgs = z.infer<typeof forgetSchema>
 export type ReadArgs = z.infer<typeof readSchema>
 export type SaveReferenceArgs = z.infer<typeof saveReferenceSchema>
 export type CheckpointArgs = z.infer<typeof checkpointSchema>
+export type ReviewArgs = z.infer<typeof reviewSchema>

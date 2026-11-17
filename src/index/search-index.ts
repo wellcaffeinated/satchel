@@ -13,6 +13,8 @@ import type {
   Memory,
   MemoryKind,
   MemoryOrigin,
+  MemoryUsage,
+  RecallLogInput,
   Reference,
   ReferenceSummary,
   Scope,
@@ -20,7 +22,7 @@ import type {
 import { matchQueryFromTokens, tokenize, toMatchQuery } from './fts-query.ts'
 import { cosine, reciprocalRankFusion } from './rank.ts'
 
-const SCHEMA_VERSION = 6
+const SCHEMA_VERSION = 7
 /** Candidates taken from each ranked list before fusion. */
 const CANDIDATES_PER_LIST = 100
 /** Cosine below this is noise, not a paraphrase. Tuned against bge-small. */
@@ -51,7 +53,7 @@ const CREATE_INDEX_TABLES = `
     id TEXT PRIMARY KEY, topic TEXT NOT NULL, kind TEXT NOT NULL, origin TEXT NOT NULL,
     date TEXT, expires TEXT, expires_at TEXT,
     scope TEXT NOT NULL, context TEXT, host TEXT,
-    filetypes TEXT NOT NULL, tags TEXT NOT NULL, about TEXT NOT NULL,
+    filetypes TEXT NOT NULL, tags TEXT NOT NULL, about TEXT NOT NULL, core INTEGER NOT NULL,
     created TEXT NOT NULL, updated TEXT NOT NULL, source TEXT NOT NULL, text TEXT NOT NULL,
     text_hash TEXT NOT NULL);
   CREATE INDEX memories_topic ON memories(topic);
@@ -75,10 +77,14 @@ const CREATE_INDEX_TABLES = `
 `
 
 // The recall log is usage data: it is created here but never dropped by a rebuild.
+// `via` and `context` came later, so rows written before them hold NULL there.
 const CREATE_RECALL_LOG = `
-  CREATE TABLE IF NOT EXISTS recall_log(memory_id TEXT NOT NULL, ts TEXT NOT NULL, client TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS recall_log(
+    memory_id TEXT NOT NULL, ts TEXT NOT NULL, client TEXT NOT NULL, via TEXT, context TEXT);
   CREATE INDEX IF NOT EXISTS recall_log_memory ON recall_log(memory_id);
+  CREATE INDEX IF NOT EXISTS recall_log_ts ON recall_log(ts);
 `
+const RECALL_LOG_ADDED_COLUMNS = ['via', 'context']
 
 type Row = Record<string, SQLOutputValue>
 
@@ -111,6 +117,13 @@ export interface SimilarInput {
   excludeId: string
   limit: number
   vector?: { model: string; vector: Float32Array }
+}
+
+/** Two memories whose first-paragraph vectors are close. */
+export interface VectorPair {
+  a: string
+  b: string
+  score: number
 }
 
 export interface PendingEmbedding {
@@ -150,7 +163,20 @@ export interface SearchIndex {
   setVector(input: { id: string; model: string; textHash: string; vector: Float32Array }): void
   pendingEmbeddings(input: { model: string; limit: number }): PendingEmbedding[]
   vectorCount(model: string): number
-  logRecall(input: { ids: string[]; client: string }): void
+  logRecall(input: RecallLogInput): void
+  /**
+   * Live pinned memories that are global, or scoped to the given context or machine, by topic
+   * then creation. Stricter than search: with no context, no context-scoped memory shows.
+   */
+  pinned(input: { context?: string; host?: string }): Memory[]
+  /** Every live memory, by topic then creation. */
+  liveMemories(): Memory[]
+  /** Usage since `since`, core showings left out; only memories used at all. */
+  usage(since: string): MemoryUsage[]
+  /** Contexts named in logged calls since `since`. */
+  activeContexts(since: string): string[]
+  /** Pairs of live memories with vectors from `model` at least `minScore` apart, closest first. */
+  vectorPairs(input: { model: string; minScore: number }): VectorPair[]
   /** Memories and references whose `expires` has passed, with the files that hold them. */
   expiredEntries(): { id: string; path: string }[]
   /** Drops and recreates every index table except recall_log. */
@@ -210,11 +236,54 @@ function toMemory(row: Row): Memory {
     ...(date === undefined ? {} : { date }),
     ...(expires === undefined ? {} : { expires }),
     ...scopedAndLabelled(row),
+    ...(row.core === 1 ? { core: true as const } : {}),
     created: text(row, 'created'),
     updated: text(row, 'updated'),
     source: text(row, 'source'),
     text: text(row, 'text'),
   }
+}
+
+/** A log entry that found the memory on purpose, rather than `brief` loading it for the work. */
+const LOOKUP_VIAS = new Set(['recall', 'read'])
+
+/** One log row per showing, folded into per-memory usage: distinct days, contexts, last use. */
+function summariseUsage(rows: Row[]): MemoryUsage[] {
+  const byId = Map.groupBy(rows, (row) => text(row, 'memory_id'))
+  return [...byId].map(([id, entries]) => {
+    const dayOf = (row: Row) => text(row, 'ts').slice(0, 10)
+    // Rows logged before `via` existed are counted as lookups.
+    const isLookup = (row: Row) => row.via === null || LOOKUP_VIAS.has(text(row, 'via'))
+    const lookupDays = new Set(entries.filter(isLookup).map(dayOf))
+    const loadDays = new Set(entries.filter((row) => !isLookup(row)).map(dayOf))
+    const contexts = new Set(entries.flatMap((row) => optionalText(row, 'context') ?? []))
+    return {
+      id,
+      lookupDays: lookupDays.size,
+      loadOnlyDays: [...loadDays].filter((day) => !lookupDays.has(day)).length,
+      contexts: [...contexts].sort(),
+      // ISO 8601 UTC timestamps sort as text.
+      lastUsed:
+        entries
+          .map((row) => text(row, 'ts'))
+          .toSorted()
+          .at(-1) ?? '',
+    }
+  })
+}
+
+/** Every pair at least `minScore` apart by cosine, closest first. */
+function closePairs(vectors: { id: string; vector: Float32Array }[], minScore: number) {
+  return vectors
+    .flatMap((first, index) =>
+      vectors.slice(index + 1).map((second) => ({
+        a: first.id,
+        b: second.id,
+        score: cosine(first.vector, second.vector),
+      })),
+    )
+    .filter((pair) => pair.score >= minScore)
+    .sort((x, y) => y.score - x.score || x.a.localeCompare(y.a) || x.b.localeCompare(y.b))
 }
 
 function toReferenceSummary(row: Row): ReferenceSummary {
@@ -371,7 +440,21 @@ function prepareDatabase(db: DatabaseSync): DatabaseSync {
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
   }
   db.exec(CREATE_RECALL_LOG)
+  addMissingRecallLogColumns(db)
   return db
+}
+
+/** A log created before `via` and `context` existed gains them, its old rows holding NULL. */
+function addMissingRecallLogColumns(db: DatabaseSync): void {
+  const present = new Set(
+    db
+      .prepare('PRAGMA table_info(recall_log)')
+      .all()
+      .map((row) => String(row.name)),
+  )
+  for (const column of RECALL_LOG_ADDED_COLUMNS.filter((name) => !present.has(name))) {
+    db.exec(`ALTER TABLE recall_log ADD COLUMN ${column} TEXT`)
+  }
 }
 
 function dropIndexTables(db: DatabaseSync): void {
@@ -472,8 +555,8 @@ export function createSearchIndex({
       ])
       run(
         `INSERT INTO memories(id, topic, kind, origin, date, expires, expires_at, scope, context,
-           host, filetypes, tags, about, created, updated, source, text, text_hash)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           host, filetypes, tags, about, core, created, updated, source, text, text_hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           memory.id,
           memory.topic,
@@ -488,6 +571,7 @@ export function createSearchIndex({
           JSON.stringify(memory.filetypes ?? []),
           JSON.stringify(memory.tags ?? []),
           JSON.stringify(memory.about ?? []),
+          memory.core ? 1 : 0,
           memory.created,
           memory.updated,
           memory.source,
@@ -915,13 +999,58 @@ export function createSearchIndex({
     vectorCount(model) {
       return Number(one('SELECT count(*) AS n FROM vectors WHERE model = ?', [model])?.n ?? 0)
     },
-    logRecall({ ids, client }) {
-      const ts = new Date().toISOString()
+    logRecall({ ids, client, via, context }) {
+      const ts = now().toISOString()
       transaction(() => {
         for (const id of ids) {
-          run('INSERT INTO recall_log(memory_id, ts, client) VALUES (?, ?, ?)', [id, ts, client])
+          run(
+            'INSERT INTO recall_log(memory_id, ts, client, via, context) VALUES (?, ?, ?, ?, ?)',
+            [id, ts, client, via, context ?? null],
+          )
         }
       })
+    },
+    pinned({ context, host }) {
+      const live = liveClause(moment())
+      return all(
+        `SELECT m.* FROM memories m WHERE m.core = 1 AND ${live.sql}
+           AND (m.scope = 'global'
+             OR (m.scope = 'context' AND m.context = ?)
+             OR (m.scope = 'host' AND m.host = ?))
+         ORDER BY m.topic, m.created, m.id`,
+        [...live.params, context ?? null, host ?? null],
+      ).map(toMemory)
+    },
+    liveMemories() {
+      const live = liveClause(moment())
+      return all(
+        `SELECT m.* FROM memories m WHERE ${live.sql} ORDER BY m.topic, m.created, m.id`,
+        live.params,
+      ).map(toMemory)
+    },
+    usage(since) {
+      const rows = all(
+        `SELECT memory_id, ts, via, context FROM recall_log
+         WHERE ts >= ? AND (via IS NULL OR via != 'core')`,
+        [since],
+      )
+      return summariseUsage(rows)
+    },
+    activeContexts(since) {
+      return all(
+        `SELECT DISTINCT context FROM recall_log WHERE ts >= ? AND context IS NOT NULL
+         ORDER BY context`,
+        [since],
+      ).map((row) => text(row, 'context'))
+    },
+    vectorPairs({ model, minScore }) {
+      const live = liveClause(moment())
+      const vectors = all(
+        `SELECT m.id AS id, v.vec AS vec FROM vectors v JOIN memories m ON m.id = v.id
+         WHERE v.model = ? AND ${live.sql} ORDER BY m.id`,
+        [model, ...live.params],
+      ).map((row) => ({ id: text(row, 'id'), vector: blobToVector(row.vec) }))
+      return closePairs(vectors, minScore)
     },
     expiredEntries() {
       const live = liveClause(moment())

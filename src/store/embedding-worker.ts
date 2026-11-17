@@ -1,7 +1,7 @@
 import type { Embedder, EmbedderLoader } from '../embed/index.ts'
 import type { SearchIndex } from '../index/index.ts'
+import { leadParagraph } from '../lead-paragraph.ts'
 import { log } from '../log.ts'
-import { leadParagraph } from './memory-files.ts'
 
 const BACKFILL_BATCH_SIZE = 16
 

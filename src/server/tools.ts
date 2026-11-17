@@ -10,6 +10,7 @@ import {
   memorizeSchema,
   readSchema,
   recallSchema,
+  reviewSchema,
   saveReferenceSchema,
 } from './schemas.ts'
 import type { SatchelService } from './service.ts'
@@ -23,6 +24,7 @@ type ToolName =
   | 'read'
   | 'forget'
   | 'checkpoint'
+  | 'review'
 
 export const TOOL_DESCRIPTIONS = {
   brief:
@@ -39,6 +41,8 @@ export const TOOL_DESCRIPTIONS = {
     'Delete a memory (m_...), reference (r_...) or checkpoint (c_...) by id; the reply says what went. Call when the user asks you to forget something, or a memory is wrong or obsolete and not worth rewriting with `memorize` + `replaces`.',
   checkpoint:
     'Record where work stopped on one thread of one context so a later session can resume. `context` and `thread` are what `brief` took: in a git repo the project id (host/owner/repo, else the directory name) and the branch; outside one, a short name for the undertaking ("grant-proposal") and "main" by default. Call when stopping work (end of session, hand-off, switching threads) with a 1-3 sentence summary: what is done, what is next, what blocks, and the HEAD `commit` for code. Overwrites the previous checkpoint for that thread; omitting `summary` or `commit` keeps the stored one. `done: true` deletes it once the thread is merged, finished or abandoned.',
+  review:
+    'Report on the memory store for upkeep, not for normal work: the core (pinned memories, size, ranked candidates with scores), pairs of memories that may be duplicates, and memories nothing has used lately with hints about their metadata. Read-only. Call it when the user asks to tidy memory, or from a scheduled consolidation job.',
 } satisfies Record<ToolName, string>
 
 const INTERNAL_ERROR_TEXT = 'Satchel hit an internal error; the operation did not complete.'
@@ -167,5 +171,15 @@ export function registerSatchelTools(
       },
     },
     (args, context) => run('checkpoint', () => service.checkpoint(args, clientOf(context))),
+  )
+  server.registerTool(
+    'review',
+    {
+      title: 'Review memory',
+      description: TOOL_DESCRIPTIONS.review,
+      inputSchema: reviewSchema,
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+    },
+    (args) => run('review', () => service.review(args)),
   )
 }

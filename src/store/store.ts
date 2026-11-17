@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path'
 import { CORE_MAX_CHARS, EXPIRY_SWEEP_INTERVAL_MS, REFERENCES_LISTED_MAX } from '../config.ts'
 import { createHuggingFaceLoader, type EmbedderLoader } from '../embed/index.ts'
 import { createSearchIndex, hashText, type SearchIndex } from '../index/index.ts'
+import { leadParagraph } from '../lead-paragraph.ts'
 import { log } from '../log.ts'
 import {
   type Checkpoint,
@@ -15,10 +16,12 @@ import {
   type MemorizeResult,
   type Memory,
   type RecallInput,
+  type RecallLogInput,
   type Reference,
   type ReferenceSummary,
   SatchelError,
   type SaveReferenceInput,
+  type SimilarPair,
   type Store,
   type Topic,
 } from '../types.ts'
@@ -26,7 +29,6 @@ import { createEmbeddingWorker } from './embedding-worker.ts'
 import { createGitRepo } from './git-repo.ts'
 import {
   hashContent,
-  leadParagraph,
   randomId,
   renderCheckpoint,
   renderMemory,
@@ -47,6 +49,14 @@ import { createWriteQueue } from './write-queue.ts'
 
 const WATCH_DEBOUNCE_MS = 200
 const SIMILAR_LIMIT = 3
+// Stricter than memorize's similar list (0.75), which may name related rules: a review
+// should list pairs that probably say the same thing. With bge-small, hand-labelled pairs
+// from a real store scored 0.79-0.87 for duplicates and at most 0.71 for distinct rules.
+const DUPLICATE_MIN_COSINE = 0.78
+// Without embeddings: at least half the words of the two first paragraphs in common.
+const DUPLICATE_MIN_WORD_OVERLAP = 0.5
+const WORD_MIN_LENGTH = 4
+const WORD = /[\p{L}\p{N}]+/gu
 
 export interface StoreOptions {
   /** The memories: `repo/` and `index.sqlite`. Nothing else is written here. */
@@ -77,6 +87,21 @@ export interface SatchelStore extends Store {
 function undefinedIfEmpty(value: string | undefined): string | undefined {
   const trimmed = value?.trim()
   return trimmed ? trimmed : undefined
+}
+
+/** The longer words of a memory's first paragraph, for comparing wording. */
+function leadWords(memory: Memory): Set<string> {
+  const words = leadParagraph(memory.text).toLowerCase().match(WORD) ?? []
+  return new Set(words.filter((word) => word.length >= WORD_MIN_LENGTH))
+}
+
+/** Shared words over all words of the two first paragraphs (Jaccard). */
+function wordOverlap(a: Memory, b: Memory): number {
+  const first = leadWords(a)
+  const second = leadWords(b)
+  const shared = [...first].filter((word) => second.has(word)).length
+  const total = new Set([...first, ...second]).size
+  return total === 0 ? 0 : shared / total
 }
 
 function checkpointPath(context: string, thread: string): string {
@@ -267,9 +292,45 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
     throw new SatchelError('not_found', `No memory or reference with id "${id}".`)
   }
 
-  async function logRecall(input: { ids: string[]; client: string }) {
+  async function logRecall(input: RecallLogInput) {
     if (input.ids.length === 0) return
-    index.logRecall({ ids: input.ids, client: cleanClientName(input.client) })
+    index.logRecall({ ...input, client: cleanClientName(input.client) })
+  }
+
+  function pairOf(ids: { a: string; b: string }, score: number, method: SimilarPair['method']) {
+    const a = index.getMemory(ids.a)
+    const b = index.getMemory(ids.b)
+    return a && b ? [{ a, b, score, method }] : []
+  }
+
+  /** With embeddings: every pair of close vectors. */
+  function vectorPairs(model: string): SimilarPair[] {
+    return index
+      .vectorPairs({ model, minScore: DUPLICATE_MIN_COSINE })
+      .flatMap((pair) => pairOf(pair, pair.score, 'vector'))
+  }
+
+  /** Without embeddings: memorize's full-text similar check, run for every memory. */
+  function textPairs(): SimilarPair[] {
+    const candidates = index
+      .liveMemories()
+      .flatMap((memory) =>
+        index
+          .similar({ text: leadParagraph(memory.text), excludeId: memory.id, limit: SIMILAR_LIMIT })
+          .map((other) =>
+            memory.id < other.id ? { a: memory, b: other } : { a: other, b: memory },
+          ),
+      )
+    const unique = new Map(candidates.map((pair) => [`${pair.a.id} ${pair.b.id}`, pair]))
+    return [...unique.values()]
+      .map((pair) => ({ ...pair, score: wordOverlap(pair.a, pair.b), method: 'text' as const }))
+      .filter((pair) => pair.score >= DUPLICATE_MIN_WORD_OVERLAP)
+      .sort((x, y) => y.score - x.score || x.a.id.localeCompare(y.a.id))
+  }
+
+  async function similarPairs(): Promise<SimilarPair[]> {
+    const vectorsReady = embedModel !== 'off' && index.vectorCount(embedModel) > 0
+    return vectorsReady ? vectorPairs(embedModel) : textPairs()
   }
 
   async function labels(): Promise<Labels> {
@@ -322,6 +383,7 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
       ...(fields.filetypes === undefined ? {} : { filetypes: fields.filetypes }),
       ...(fields.tags === undefined ? {} : { tags: fields.tags }),
       ...(fields.about === undefined ? {} : { about: fields.about }),
+      ...(fields.core ? { core: true as const } : {}),
       created: replaced?.created ?? timestamp,
       updated: timestamp,
       source,
@@ -543,6 +605,11 @@ export async function createStore(options: StoreOptions): Promise<SatchelStore> 
     read,
     saveReference: (input) => queue.run(() => saveReferenceLocked(input)),
     logRecall,
+    pinned: async (filter) => index.pinned(filter),
+    liveMemories: async () => index.liveMemories(),
+    usage: async ({ since }) => index.usage(since),
+    activeContexts: async ({ since }) => index.activeContexts(since),
+    similarPairs,
     labels,
     memorize: (input) => queue.run(() => memorizeLocked(input)),
     forget: (id, source) => queue.run(() => forgetLocked(id, source)),

@@ -8,6 +8,7 @@ import {
 } from '../config.ts'
 import type { Checkpoint, Memory, MemoryKind, MemoryOrigin, Reference, Scope } from '../types.ts'
 import {
+  optionalFlag,
   optionalString,
   optionalStringList,
   parseFrontmatter,
@@ -26,14 +27,6 @@ const KIND_BY_NAME = new Map<string, MemoryKind>(MEMORY_KINDS.map((kind) => [kin
 const ORIGIN_BY_NAME = new Map<string, MemoryOrigin>(
   MEMORY_ORIGINS.map((origin) => [origin, origin]),
 )
-
-/**
- * The rule a memory states: its first paragraph. Embeddings and the similar-memory check
- * use only this, so code examples do not make unrelated rules look alike.
- */
-export function leadParagraph(text: string): string {
-  return text.trim().split(/\n[ \t]*\n/, 1)[0] ?? ''
-}
 
 export function hashContent(content: string): string {
   return createHash('sha1').update(content).digest('hex')
@@ -124,6 +117,7 @@ export function parseMemory(raw: string): Memory {
     ...(expires === undefined ? {} : { expires }),
     ...parseScope(data),
     ...parseLabels(data),
+    ...(optionalFlag(data, 'core') ? { core: true as const } : {}),
     created,
     updated: optionalString(data, 'updated') ?? created,
     source: optionalString(data, 'source') ?? 'unknown',
@@ -158,6 +152,7 @@ export function renderMemory(memory: Memory): string {
       ...(memory.expires === undefined ? {} : { expires: memory.expires }),
       ...scopeData(memory),
       ...labelData(memory),
+      ...(memory.core ? { core: true } : {}),
       created: memory.created,
       updated: memory.updated,
       source: memory.source,

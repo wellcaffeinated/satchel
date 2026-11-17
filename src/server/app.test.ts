@@ -154,7 +154,7 @@ describe.each(['modern', 'legacy'] as const)('MCP over Streamable HTTP, %s era',
     expect(instructions.length).toBeLessThanOrEqual(INSTRUCTIONS_MAX_CHARS)
   })
 
-  it('lists seven tools with annotations and tight descriptions', async () => {
+  it('lists eight tools with annotations and tight descriptions', async () => {
     const { tools } = await client().listTools()
     expect(tools.map((tool) => tool.name).toSorted()).toEqual([
       'brief',
@@ -163,6 +163,7 @@ describe.each(['modern', 'legacy'] as const)('MCP over Streamable HTTP, %s era',
       'memorize',
       'read',
       'recall',
+      'review',
       'save_reference',
     ])
     for (const tool of tools) {
@@ -193,7 +194,12 @@ describe.each(['modern', 'legacy'] as const)('MCP over Streamable HTTP, %s era',
     expect(textOf(result)).toBe(
       '- m_aaaaaaaa [svelte | global | 2026-11-01] Svelte 5 bindings write to the getter.',
     )
-    expect(harness().store.recallLog).toContainEqual({ id: 'm_aaaaaaaa', client: 'test-client' })
+    expect(harness().store.recallLog).toContainEqual({
+      id: 'm_aaaaaaaa',
+      client: 'test-client',
+      via: 'recall',
+      context: undefined,
+    })
   })
 
   it('recall without query or topic is an error result', async () => {
@@ -580,6 +586,79 @@ describe('references over MCP', () => {
     const read = await call('read', { id })
     expect(read.text).toMatch(/```jsonc\n\{ "linter": \{\} \}\n```$/)
     expect((await call('read', { id: 'r_zzzzzzzz' })).isError).toBe(true)
+  })
+})
+
+describe('the core and review over MCP', () => {
+  const state: { harness?: Harness; client?: Client } = {}
+  const call = async (name: string, args: Record<string, unknown>) => {
+    if (!state.client) throw new Error('not connected')
+    const result = await state.client.callTool({ name, arguments: args })
+    return { text: textOf(result), isError: isError(result) }
+  }
+  const logged = () => state.harness?.store.recallLog ?? []
+  beforeAll(async () => {
+    state.harness = await start({
+      core: 'Hand-written line.',
+      topics: { talk: { trigger: 'read before writing to the owner' } },
+      memories: [
+        memory({ id: 'm_aaaaaaaa', topic: 'talk', text: 'Write in plain words.', core: true }),
+        memory({
+          id: 'm_bbbbbbbb',
+          topic: 'talk',
+          scope: 'context',
+          context: 'github.com/me/app',
+          text: 'This repo commits on main.',
+          core: true,
+        }),
+        memory({ id: 'm_cccccccc', topic: 'talk', text: 'Number open questions.' }),
+      ],
+    })
+    state.client = await connect(state.harness.base)
+  })
+  afterAll(async () => {
+    await state.client?.close()
+    await state.harness?.close()
+  })
+
+  it('brief shows core.md, then the pinned memories the caller can see, and logs them as core', async () => {
+    const plain = await call('brief', {})
+    expect(plain.text).toContain(
+      '## Core\nHand-written line.\n- m_aaaaaaaa Write in plain words.\n\n',
+    )
+    expect(plain.text).not.toContain('This repo commits on main.')
+    const inRepo = await call('brief', { context: 'github.com/me/app' })
+    expect(inRepo.text).toContain('- m_bbbbbbbb This repo commits on main.')
+    expect(logged()).toContainEqual({
+      id: 'm_bbbbbbbb',
+      client: 'test-client',
+      via: 'core',
+      context: 'github.com/me/app',
+    })
+  })
+
+  it('memorize pins and unpins with core', async () => {
+    const pinned = await call('memorize', { replaces: 'm_cccccccc', core: true })
+    expect(pinned.text).toContain('[talk | global | core |')
+    expect((await call('brief', {})).text).toContain('- m_cccccccc Number open questions.')
+    await call('memorize', { replaces: 'm_cccccccc', core: false })
+    expect((await call('brief', {})).text).not.toContain('Number open questions.')
+  })
+
+  it('read is logged as a read', async () => {
+    await call('read', { id: 'm_cccccccc' })
+    expect(logged()).toContainEqual({ id: 'm_cccccccc', client: 'test-client', via: 'read' })
+  })
+
+  it('review gives the overview, and one section on request', async () => {
+    const overview = await call('review', {})
+    expect(overview.isError).toBe(false)
+    expect(overview.text).toContain('## Core')
+    expect(overview.text).toContain('## Possible duplicates')
+    expect(overview.text).toContain('## Unused')
+    const core = await call('review', { section: 'core' })
+    expect(core.text).toContain('Pinned. fit')
+    expect((await call('review', { section: 'everything' })).isError).toBe(true)
   })
 })
 

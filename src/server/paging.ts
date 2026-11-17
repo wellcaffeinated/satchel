@@ -9,7 +9,8 @@ export interface Page<T> {
   total: number
 }
 
-function runningTotals(sizes: number[]): number[] {
+/** Each size added to all before it: where each item ends. */
+export function runningTotals(sizes: number[]): number[] {
   const totals: number[] = []
   for (const size of sizes) totals.push((totals.at(-1) ?? 0) + size)
   return totals

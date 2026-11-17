@@ -50,6 +50,7 @@ export interface ValidMemoryFields {
   host?: string
   filetypes?: string[]
   tags?: string[]
+  core: boolean
   topicTrigger?: string
 }
 
@@ -243,6 +244,7 @@ function memoryAsInput(memory: Memory): Omit<MemorizeInput, 'source'> {
     host: memory.host,
     filetypes: memory.filetypes,
     tags: memory.tags,
+    core: memory.core ?? false,
   }
 }
 
@@ -267,6 +269,7 @@ export function validateMemorize(input: MemorizeInput, existing?: Memory): Valid
     ...(expires === undefined ? {} : { expires }),
     ...scopeFields(merged),
     ...labelFields(merged),
+    core: merged.core ?? false,
     ...(merged.topicTrigger === undefined
       ? {}
       : { topicTrigger: validateTrigger(merged.topicTrigger) }),

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Checkpoint, Memory } from '../types.ts'
-import { createRenderer, USAGE_RULES } from './render.ts'
+import { createRenderer, fitCore, renderCoreEntry, USAGE_RULES } from './render.ts'
 
 const MEMORY: Memory = {
   id: 'm_01hzx3k9',
@@ -57,6 +57,12 @@ describe('renderMemory', () => {
     expect(renderMemory(preference)).toContain('[svelte | global | preference | 2026-11-12]')
   })
 
+  it('marks a pinned memory', () => {
+    expect(renderMemory({ ...MEMORY, core: true })).toContain(
+      '[svelte | global | core | 2026-11-12]',
+    )
+  })
+
   it('shows the updated day in the configured time zone', () => {
     const toronto = createRenderer({ timeZone: 'America/Toronto' })
     const lateEvening: Memory = { ...MEMORY, updated: '2026-11-16T03:30:00Z' }
@@ -107,9 +113,34 @@ describe('renderCheckpoint', () => {
   })
 })
 
+describe('renderCoreEntry', () => {
+  it('shows only the first paragraph, and says where the rest is', () => {
+    expect(renderCoreEntry(MEMORY)).toBe(
+      "- m_01hzx3k9 Function bindings in Svelte 5 write to the getter's target.",
+    )
+    const withExample = { ...MEMORY, text: 'Use pnpm.\n\n```sh\npnpm install\n```' }
+    expect(renderCoreEntry(withExample)).toBe('- m_01hzx3k9 Use pnpm. (more: read m_01hzx3k9)')
+  })
+})
+
+describe('fitCore', () => {
+  const pinned = (id: string, text: string): Memory => ({ ...MEMORY, id, text, core: true })
+
+  it('shows pinned memories after core.md until the size limit, and lists the rest', () => {
+    const first = pinned('m_aaaaaaaa', 'a'.repeat(20))
+    const second = pinned('m_bbbbbbbb', 'b'.repeat(20))
+    const third = pinned('m_cccccccc', 'c')
+    const room = 'x'.repeat(100 - renderCoreEntry(first).length - 1)
+    const view = fitCore({ text: room, pinned: [first, second, third], maxChars: 100 })
+    expect(view.shown.map((m) => m.id)).toEqual(['m_aaaaaaaa'])
+    // The cut is a prefix: a later memory that would fit stays out with the one before it.
+    expect(view.overflow.map((m) => m.id)).toEqual(['m_bbbbbbbb', 'm_cccccccc'])
+  })
+})
+
 describe('renderBrief', () => {
   const base = {
-    core: 'Prefer pnpm.',
+    core: { text: 'Prefer pnpm.', shown: [], overflow: [] },
     topics: [{ name: 'svelte', trigger: 'read before Svelte work', count: 3 }],
     contextMemoryCount: 2,
     hosts: [],
@@ -162,6 +193,24 @@ describe('renderBrief', () => {
     const hosts = [{ name: 'evil\n- forged (9)', count: 1 }]
     const text = renderBrief({ ...base, hosts, checkpoints: [] })
     expect(text.split('\n').filter((line) => line.startsWith('- forged'))).toHaveLength(0)
+  })
+
+  it('puts pinned memories under core.md and names the ones past the limit', () => {
+    const core = {
+      text: 'Prefer pnpm.',
+      shown: [{ ...MEMORY, core: true as const }],
+      overflow: [{ ...MEMORY, id: 'm_zzzzzzzz', core: true as const }],
+    }
+    const text = renderBrief({ ...base, core, checkpoints: [] })
+    expect(text).toContain(
+      "## Core\nPrefer pnpm.\n- m_01hzx3k9 Function bindings in Svelte 5 write to the getter's target.\nPinned but past the core's size limit: m_zzzzzzzz (read them).",
+    )
+    const empty = renderBrief({
+      ...base,
+      core: { text: '', shown: [], overflow: [] },
+      checkpoints: [],
+    })
+    expect(empty).toContain('## Core\n(empty)')
   })
 
   it('ends with the usage rules, for clients that do not show MCP instructions', () => {

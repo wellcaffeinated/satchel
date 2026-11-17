@@ -23,6 +23,7 @@ export interface Memory {
   host?: string // set when scope is "host"
   filetypes?: string[] // extensions without the dot; absent when empty
   tags?: string[] // lowercase kebab-case labels; absent when empty
+  core?: true // pinned into the core every brief shows; absent when not pinned
   created: string // ISO 8601 UTC
   updated: string
   source: string // client name of the writer
@@ -117,6 +118,7 @@ export interface MemorizeInput {
   host?: string
   filetypes?: string[]
   tags?: string[]
+  core?: boolean // true pins the memory into the core, false unpins it
   topicTrigger?: string // required when the topic does not exist yet
   replaces?: string // id of a memory to update in place
   source: string
@@ -144,6 +146,41 @@ export interface RecallInput {
   about?: string[]
   /** Keeps only memories of this kind. */
   kind?: MemoryKind
+}
+
+/**
+ * How a memory reached a client, for the recall log: shown in the core, loaded by `brief`
+ * for the work or entities it described, returned by `recall`, or fetched with `read`.
+ */
+export type RecallVia = 'core' | 'loaded' | 'recall' | 'read'
+
+export interface RecallLogInput {
+  ids: string[]
+  client: string
+  via: RecallVia
+  /** The caller's context, when it said. */
+  context?: string
+}
+
+/** How one memory was used since some time, leaving out showings in the core. */
+export interface MemoryUsage {
+  id: string
+  /** Days with at least one `recall` or `read` of it (or a log entry older than `via`). */
+  lookupDays: number
+  /** Days on which `brief` loaded it for the work, and nothing looked it up. */
+  loadOnlyDays: number
+  /** The callers' contexts, where they said. */
+  contexts: string[]
+  lastUsed: string // ISO 8601 UTC
+}
+
+/** Two memories that may state the same thing. */
+export interface SimilarPair {
+  a: Memory
+  b: Memory
+  /** Cosine similarity of the first paragraphs, or the share of words they have in common. */
+  score: number
+  method: 'vector' | 'text'
 }
 
 /** How many memories carry one label value. */
@@ -193,7 +230,17 @@ export interface Store {
    */
   recall(input: RecallInput): Promise<Memory[]>
   /** Records that these memories were shown to a client. */
-  logRecall(input: { ids: string[]; client: string }): Promise<void>
+  logRecall(input: RecallLogInput): Promise<void>
+  /** Live pinned memories the caller can see (other contexts' and machines' left out), by topic. */
+  pinned(input: { context?: string; host?: string }): Promise<Memory[]>
+  /** Every live memory, by topic then creation. */
+  liveMemories(): Promise<Memory[]>
+  /** Usage since `since` (ISO 8601) of each memory used at all, core showings left out. */
+  usage(input: { since: string }): Promise<MemoryUsage[]>
+  /** Contexts any client named in a logged call since `since`. */
+  activeContexts(input: { since: string }): Promise<string[]>
+  /** Pairs of live memories whose first paragraphs are close, closest first. */
+  similarPairs(): Promise<SimilarPair[]>
   /** Every label used by a live memory, most used first. */
   labels(): Promise<Labels>
   /** References matching a recall request, without content; at most REFERENCES_LISTED_MAX. */

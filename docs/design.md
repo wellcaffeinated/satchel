@@ -19,8 +19,9 @@ against; when code and this file disagree, fix one of them in the same change.
 
 ## What is stored
 
-1. **Core**: `core.md`, standing facts and preferences that apply everywhere. Hard cap
-   `CORE_MAX_CHARS` (4,000). Loaded by `brief`. Only the owner edits it.
+1. **Core**: standing facts and preferences that matter in every conversation, loaded by
+   `brief`. Two parts share the cap `CORE_MAX_CHARS` (4,000): `core.md`, which only the
+   owner edits, then the memories pinned with `core: true` (see "The core").
 2. **Map**: one line per topic: name, trigger ("read before ..."), counts. Rendered from
    `topics.yaml` plus counts. Loaded in MCP `instructions` and by `brief`, followed by the
    tags and file types in use (with counts) and, in `brief`, the machines that have
@@ -132,6 +133,7 @@ expires: 2027-01-01      # optional
 about: [person:alice]    # optional
 filetypes: [ts, js]      # optional
 tags: [code]             # optional
+core: true               # optional; pinned into the core
 created: 2026-11-12T18:04:00Z
 updated: 2026-11-12T18:04:00Z
 source: claude-code      # MCP clientInfo.name of the writer
@@ -208,6 +210,7 @@ hash-only checkpoint, which keeps any existing summary. At most 3,000 characters
 src/
   types.ts          shared types and the Store interface (the seam between modules)
   config.ts         env parsing, limits
+  lead-paragraph.ts a memory's first paragraph, shared by store/ and server/
   store/            files + git + file watching           -> implements Store
   index/            SQLite FTS5, vectors, hybrid ranking   (used only by store/)
   embed/            in-process embedding model             (used only by index/)
@@ -261,12 +264,13 @@ All tools return text content written for a model to read (compact, no JSON dump
 
 | Tool | Input | Result |
 |---|---|---|
-| `brief` | `context?`, `thread?`, `host?`, `filetypes?`, `tags?`, `about?` | Core; topic map with counts; the labels lines and the `About:` line; the machines that have host-scoped memories (and which is the caller's when `host` is given); with `context`, the count of its context-scoped memories and the checkpoint for `thread` (or all of the context's checkpoints), and without it the most recently updated checkpoints, one line each; with `filetypes` or `tags`, a "Loaded for this work" section holding every matching memory in full plus the titles of matching references, paged like `recall`; with `about`, a "Loaded about" section holding every memory about those entities, paged the same way; the usage rules. |
-| `recall` | `query?`, `topic?`, `context?`, `host?`, `filetypes?`, `tags?`, `about?`, `kind?`, `limit?`, `offset?` | Matching memories in full, then matching references by title. At least one of `query`, `topic`, `host`, `kind`, `filetypes`, `tags`, `about`. With `query` it searches; without, it lists. `kind` keeps only memories of that kind, and on its own lists every memory of it; references have no kind, so a request with `kind` lists none. Paged (see below). Logs each returned memory id. |
-| `memorize` | `text`, `topic`, `kind?` (default `fact`), `origin?` (default `inferred`), `date?`, `expires?`, `about?`, `scope?` (default `global`), `context?`, `host?`, `filetypes?`, `tags?`, `topic_trigger?`, `replaces?` | Saves and returns the id (the result names the kind and origin saved, defaults included), plus up to 3 similar existing memories so the caller can merge (not on an update that leaves `text` alone, which cannot create a duplicate). Unknown `topic` without `topic_trigger` is an error that lists existing topics. `replaces: <id>` updates that memory in place: every field left out keeps its stored value, so `text` and `topic` become optional (see "Updating in place"). |
+| `brief` | `context?`, `thread?`, `host?`, `filetypes?`, `tags?`, `about?` | Core (`core.md`, then the pinned memories the caller can see); topic map with counts; the labels lines and the `About:` line; the machines that have host-scoped memories (and which is the caller's when `host` is given); with `context`, the count of its context-scoped memories and the checkpoint for `thread` (or all of the context's checkpoints), and without it the most recently updated checkpoints, one line each; with `filetypes` or `tags`, a "Loaded for this work" section holding every matching memory in full plus the titles of matching references, paged like `recall`; with `about`, a "Loaded about" section holding every memory about those entities, paged the same way; the usage rules. |
+| `recall` | `query?`, `topic?`, `context?`, `host?`, `filetypes?`, `tags?`, `about?`, `kind?`, `limit?`, `offset?` | Matching memories in full, then matching references by title. At least one of `query`, `topic`, `host`, `kind`, `filetypes`, `tags`, `about`. With `query` it searches; without, it lists. `kind` keeps only memories of that kind, and on its own lists every memory of it; references have no kind, so a request with `kind` lists none. Paged (see below). Logs each returned memory id (see "Recall log"). |
+| `memorize` | `text`, `topic`, `kind?` (default `fact`), `origin?` (default `inferred`), `date?`, `expires?`, `about?`, `scope?` (default `global`), `context?`, `host?`, `filetypes?`, `tags?`, `core?`, `topic_trigger?`, `replaces?` | Saves and returns the id (the result names the kind and origin saved, defaults included), plus up to 3 similar existing memories so the caller can merge (not on an update that leaves `text` alone, which cannot create a duplicate). Unknown `topic` without `topic_trigger` is an error that lists existing topics. `replaces: <id>` updates that memory in place: every field left out keeps its stored value, so `text` and `topic` become optional (see "Updating in place"). |
 | `save_reference` | `title`, `description`, `content`, `format?` (default `markdown`), `topic`, `scope?`, `context?`, `host?`, `filetypes?`, `tags?`, `about?`, `expires?`, `topic_trigger?`, `replaces?` | Saves verbatim material and returns its id. `replaces` updates in place the same way, so `title`, `description` and `content` become optional. |
 | `read` | `id` | The full content of a reference (`r_...`), or of a memory (`m_...`). |
 | `forget` | `id` | Deletes a memory, reference or checkpoint, and says what it was. |
+| `review` | `section?` (`core`, `duplicates` or `unused`), `offset?` | Read-only upkeep report (see "Review"). Without `section`, an overview of all three with the first few entries of each; with it, that section in full, paged like `recall`. |
 | `checkpoint` | `context`, `thread?` (default `main`), `commit?`, `summary?`, `done?` | Upserts the checkpoint; the reply says when it replaced an existing one, since the default `thread` makes that easy to do by accident. `done: true` deletes it (thread merged, finished or abandoned). |
 
 Topic names are lowercase kebab-case, at most 32 characters.
@@ -299,7 +303,7 @@ Details:
   alone lists that machine's host-scoped memories. An unknown `topic` returns nothing.
 - `filetypes` and `tags` given to `recall` or `brief` select memories by the matching rule
   above. Combined with `query` or `topic`, they narrow the result further.
-- A memory renders as one entry, `- m_x [topic | scope | kind | origin | date: … |
+- A memory renders as one entry, `- m_x [topic | scope | kind | origin | core | date: … |
   expires: … | filetypes: … | tags: … | about: … | updated] text`, with `kind` and
   `origin` shown only when they are not the defaults and the rest only when set, so a
   plain inferred fact reads `[topic | scope | updated]`. Continuation lines are indented.
@@ -398,8 +402,74 @@ Rules are meant to arrive when the work starts, not when the agent thinks to ask
   paragraph to report similar existing memories.
 
 `index.sqlite` index tables can be dropped and rebuilt from `repo/` at any time. The
-`recall_log(memory_id, ts, client)` table is the exception: it is usage data, kept in
-the same file but never dropped by a rebuild.
+recall log is the exception: it is usage data, kept in the same file but never dropped by
+a rebuild.
+
+### Recall log
+
+`recall_log(memory_id, ts, client, via, context)` has one row per memory shown to a client.
+`via` says how: `core` (shown in the brief's core), `loaded` (loaded by `brief` for the
+work or entities it described), `recall`, or `read`. `context` is the caller's context
+when it gave one. Rows written before `via` and `context` existed hold NULL there; they
+count as lookups. `review` reads the log; nothing else does.
+
+## The core
+
+`brief` opens with the core: `core.md` (owner-written, capped at `CORE_MAX_CHARS`), then
+the live memories with `core: true` that the caller can see, one line each, by topic then
+age. A pinned memory shows its first paragraph only, as `- m_x text`, with
+`(more: read m_x)` when it has examples. Pinning is stricter than search about scope: a
+context-scoped pinned memory shows only in a brief for that context, a host-scoped one
+only for that host, so a brief with no context shows global ones only.
+
+Pinned memories share the cap with `core.md`. They are shown in order until one does not
+fit; it and every later one are named on a final line (`Pinned but past the core's size
+limit: m_a, m_b (read them).`), so the cut is stable.
+
+Pinning is a field like any other: `memorize` with `core: true` pins (on a new memory or
+with `replaces`), `core: false` unpins, and a patch that leaves `core` out keeps it. The
+core is meant to be curated by a scheduled job that calls `review`, but any agent may pin
+when the owner asks for something to be kept in mind in every conversation.
+
+## Review
+
+`review` is a read-only report for upkeep. It computes; deciding what to pin, merge or
+relabel is left to its reader (the owner, or a scheduled job whose rules live in a
+reference in the store). Usage is measured over the last `USAGE_WINDOW_DAYS` (60) days
+from the recall log, leaving out `core` showings. A memory's usage is the number of
+distinct days it was looked up (`recall`, `read`, or a row older than `via`) and the
+further days on which `brief` only loaded it for the work, plus the contexts that asked.
+
+**Core section.** The size line (`core.md` and pinned characters against the cap, pinned
+memories past the limit, pinned memories scoped to one context or machine), every pinned
+memory, then the top 30 unpinned global memories as candidates, by score:
+
+- *Fit* (0 to 100) is trust x kind x labels. Trust: stated 1, inferred 0.7, imported 0.6.
+  Kind: preference and rule 1, fact 0.8, event 0.3. Labels: 0.5 for a memory with
+  `filetypes` or `tags`, which already loads whenever that work starts, else 1. Labels
+  are a soft penalty, not a rule: the fix for a rule that applies everywhere may be its
+  labels.
+- *Use* runs from 0.5 for a memory nobody used to 1, and reaches 0.75 at 3 days of use;
+  a load-only day counts half a lookup day. The floor keeps new memories rankable.
+- *Score* is fit x use. A pinned memory shows its fit only: the core shows it every
+  session, so lookups stop and its use says nothing.
+
+Each candidate line spells out every factor. A labelled candidate, and one with `about`
+(it loads when a conversation names the entity), gets a line saying so.
+
+**Duplicates.** Pairs of live memories whose first paragraphs are close, closest first,
+both memories in full. With embeddings, cosine at least 0.78 (stricter than `memorize`'s
+0.75: tuned on hand-labelled pairs, where duplicates scored 0.79 to 0.87 and distinct
+rules at most 0.71). Without, the `memorize` full-text check run for every memory, kept
+when the two first paragraphs share at least half their words.
+
+**Unused.** Live, unpinned memories created before the window that nothing has used in
+it. Unused often means hard to find rather than useless, so each gets hints naming what
+to check: a rule with no labels (found only by topic or search); a labelled memory (loads
+only when sessions pass those labels); a context-scoped memory whose context no session
+named in the window (dormant work, not bad metadata); a host-scoped memory (found only
+with that host); a topic none of whose memories was used (its trigger may not match how
+the work starts). With none of these, it says the metadata looks reasonable.
 
 ## Authentication
 
@@ -513,12 +583,10 @@ commit message. When a real recall misses in daily use, add it as a case first.
 
 Not built. Listed so that nothing built now closes the door on them.
 
-- **Consolidation job and the recall log.** A nightly pass that reads `recall_log` and the
-  files: report memories not recalled for six months, merge near-duplicates across topics, split oversized topics,
-  and propose promotions into core. It must trust `origin: stated` over `inferred`. The
-  brief and listings would show `last_recalled` so the owner sees it too. Needs a
-  credential a background job can use; with OAuth only, that means one of the automatic
-  options in `docs/plugin-oauth.md`.
+- **More from the review.** `review` (see "Review") reports the core, duplicates and
+  unused memories; the job that acts on it runs outside the server, as an agent with its
+  own OAuth login (Hermes) whose rules are a reference in the store. Still to come:
+  splitting oversized topics, and `last_recalled` in listings so the owner sees it too.
 - **Topic management.** Rename a topic, rewrite its trigger, merge two topics, through one
   tool or through the consolidation job. Today `topic_trigger` on an existing topic is
   ignored and a mis-named topic is permanent unless the owner edits `topics.yaml` and

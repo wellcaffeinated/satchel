@@ -29,6 +29,13 @@ describe('memory files', () => {
     expect(parseMemory(raw)).toEqual(MEMORY)
   })
 
+  it('writes core: true only for a pinned memory, and reads it back', () => {
+    const pinned = { ...MEMORY, core: true as const }
+    expect(renderMemory(pinned)).toContain('core: true')
+    expect(parseMemory(renderMemory(pinned))).toEqual(pinned)
+    expect(renderMemory(MEMORY)).not.toContain('core:')
+  })
+
   it('defaults kind to fact and origin to inferred for files written before they existed', () => {
     const raw = [
       '---',

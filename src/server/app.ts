@@ -19,6 +19,8 @@ export interface AppOptions {
   version: string
   /** IANA zone for rendering dates; UTC when absent. */
   timeZone?: string
+  /** The clock `review` measures its usage window from; the system clock when absent. */
+  now?: () => Date
   /** DNS-rebinding protection (Host must be a loopback name). For unauthenticated loopback use. */
   loopbackHostsOnly?: boolean
 }
@@ -45,7 +47,7 @@ function errorHandler(logger: Log): ErrorRequestHandler {
 
 export function createApp(options: AppOptions): Express {
   const { store, authenticate, log: logger, version } = options
-  const service = createSatchelService({ store, timeZone: options.timeZone })
+  const service = createSatchelService({ store, timeZone: options.timeZone, now: options.now })
   const mcp = createMcpHandler({ store, service, log: logger, version })
   const app = express()
 

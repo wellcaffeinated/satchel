@@ -502,7 +502,7 @@ describe('store', () => {
       const ids = [first, second, third].map((result) => result.memory.id)
       const found = await store.recall({ topic: 'general' })
       expect(found.map((m) => m.id)).toEqual(ids)
-      await store.logRecall({ ids: ids.slice(0, 2), client: 'logger' })
+      await store.logRecall({ ids: ids.slice(0, 2), client: 'logger', via: 'recall' })
       await store.close()
       const db = new DatabaseSync(join(dataDir(), 'index.sqlite'), { readOnly: true })
       const rows = db.prepare('SELECT memory_id, client FROM recall_log').all()
@@ -520,6 +520,38 @@ describe('store', () => {
       expect(similar).toHaveLength(1)
       const unrelated = await memorize(store, 'Completely different topic about bread baking.')
       expect(unrelated.similar).toEqual([])
+    })
+
+    it('pins with core: true, keeps the pin through a patch, and unpins with false', async () => {
+      const store = await open()
+      const { memory } = await memorize(store, 'Write in plain words.', { core: true })
+      expect(memory.core).toBe(true)
+      const file = git(repoDir(), 'ls-files', 'memories').trim()
+      expect(readFileSync(join(repoDir(), file), 'utf8')).toContain('core: true')
+      const patched = await store.memorize({ replaces: memory.id, origin: 'stated', source: 't' })
+      expect(patched.memory.core).toBe(true)
+      expect((await store.pinned({})).map((m) => m.id)).toEqual([memory.id])
+      await store.memorize({ replaces: memory.id, core: false, source: 't' })
+      expect(await store.pinned({})).toEqual([])
+      expect((await store.read(memory.id)).kind).toBe('memory')
+    })
+
+    it('pairs near-duplicate memories by shared words when embeddings are off', async () => {
+      const store = await open()
+      const first = await memorize(
+        store,
+        'The staging database password rotates every ninety days.',
+      )
+      const second = await memorize(store, 'Staging database password rotates every quarter.')
+      await memorize(store, 'Completely different topic about bread baking.')
+      const pairs = await store.similarPairs()
+      expect(pairs).toHaveLength(1)
+      expect(pairs[0]?.method).toBe('text')
+      expect([pairs[0]?.a.id, pairs[0]?.b.id].toSorted()).toEqual(
+        [first.memory.id, second.memory.id].toSorted(),
+      )
+      expect(pairs[0]?.score).toBeGreaterThan(0.3)
+      expect(pairs[0]?.score).toBeLessThan(1)
     })
 
     it('forgets memories and checkpoints, and errors on unknown ids', async () => {
@@ -809,6 +841,17 @@ describe('store', () => {
       await memorize(store, 'The automobile needs winter tyres.')
       const { similar } = await memorize(store, 'Vehicle tyres must be changed for winter.')
       expect(similar).toHaveLength(1)
+    })
+
+    it('pairs near-duplicate memories by vector', async () => {
+      const store = await open({ embedModel: 'fake-a', embedderLoader: fakeLoader() })
+      await store.embeddingsIdle()
+      await memorize(store, 'The automobile needs winter tyres.')
+      await memorize(store, 'Vehicle tyres must be changed for winter.')
+      await memorize(store, 'Bake the bread loaf at a lower heat.')
+      const pairs = await store.similarPairs()
+      expect(pairs.map((pair) => pair.method)).toEqual(['vector'])
+      expect(pairs[0]?.score).toBeGreaterThanOrEqual(0.78)
     })
 
     it('falls back to full text when the model fails to load', async () => {
