@@ -174,7 +174,7 @@ export const memorizeShape = {
     .max(MEMORY_MAX_CHARS, `text is over ${MEMORY_MAX_CHARS} characters; save one rule per call`)
     .optional()
     .describe(
-      'First paragraph: the rule or fact, 1-5 self-contained sentences. Examples (e.g. a BAD/GOOD code block) may follow after a blank line. Required unless replaces is given',
+      'First paragraph: the rule or fact, 1-5 sentences that make sense without this conversation. Add "as of YYYY-MM-DD" only to facts that go out of date, and point to code by its git URL, not a local path. Examples (e.g. a BAD/GOOD code block) may follow after a blank line. Required unless replaces is given',
     ),
   topic: topic
     .optional()
@@ -196,7 +196,7 @@ export const memorizeShape = {
   expires: time
     .optional()
     .describe(
-      'When this stops applying: a day YYYY-MM-DD (it still applies that whole day) or a timestamp; after that it is hidden and later deleted',
+      'When this stops applying: a day YYYY-MM-DD (it still applies that whole day) or a timestamp; after that it is hidden and later deleted. Set it on anything perishable: a plan, an offer, a temporary setup',
     ),
   about: aboutLabel.optional(),
   scope: z
