@@ -30,6 +30,10 @@ const VECTOR_MIN_SCORE = 0.52
 /** Cosine at or above this counts as "the same fact" for memorize's similar list. */
 const SIMILAR_MIN_SCORE = 0.75
 const SIMILAR_FTS_CANDIDATES = 10
+// In a search, a memory of the caller's own context or machine counts as ranking this many
+// places higher in each ranked list: it wins among similarly relevant results, but a weak
+// match stays below strong ones. Fused scores carry only rank, so a multiplier would not.
+const LOCAL_RANK_BONUS = 3
 const SIMILAR_MIN_TERM_LENGTH = 4
 const SIMILAR_MIN_SHARED_TERMS = 2
 const SIMILAR_MIN_SHARED_RATIO = 0.3
@@ -782,14 +786,12 @@ export function createSearchIndex({
       .slice(0, limit)
   }
 
-  /** The caller's own context and machine first; the order is otherwise kept. */
-  function byLocalFirst(filter: SearchFilter, memories: Memory[]): Memory[] {
-    if (filter.context === undefined && filter.host === undefined) return memories
-    const isLocal = (memory: Memory) =>
+  /** Whether a memory belongs to the caller's own context or machine. */
+  function isLocalTo(filter: SearchFilter, memory: Memory): boolean {
+    return (
       (filter.context !== undefined && memory.context === filter.context) ||
       (filter.host !== undefined && memory.host === filter.host)
-    const rank = (memory: Memory) => (isLocal(memory) ? 0 : 1)
-    return memories.toSorted((a, b) => rank(a) - rank(b))
+    )
   }
 
   /** Every match: rules for any file type first, then local, then topic and creation order. */
@@ -830,17 +832,25 @@ export function createSearchIndex({
           limit: CANDIDATES_PER_LIST,
         })
       : []
-    const scores = reciprocalRankFusion([
-      textHits.map((memory) => memory.id),
-      vectorHits.map((hit) => hit.id),
-    ])
     const known = new Map(textHits.map((memory) => [memory.id, memory]))
     const vectorOnly = vectorHits.map((hit) => hit.id).filter((id) => !known.has(id))
     const byId = new Map([...known, ...memoriesByIds(vectorOnly)])
-    const ranked = [...scores.entries()]
-      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    const isLocal = (id: string) => {
+      const memory = byId.get(id)
+      return memory !== undefined && isLocalTo(filter, memory)
+    }
+    const scores = reciprocalRankFusion(
+      [textHits.map((memory) => memory.id), vectorHits.map((hit) => hit.id)],
+      { rankBonus: (id) => (isLocal(id) ? LOCAL_RANK_BONUS : 0) },
+    )
+    // On equal scores the local memory goes first, then id order.
+    const localFirst = (id: string) => (isLocal(id) ? 0 : 1)
+    return [...scores.entries()]
+      .sort(
+        (a, b) => b[1] - a[1] || localFirst(a[0]) - localFirst(b[0]) || a[0].localeCompare(b[0]),
+      )
+      .slice(0, limit)
       .flatMap(([id]) => byId.get(id) ?? [])
-    return byLocalFirst(filter, ranked).slice(0, limit)
   }
 
   function search(input: SearchInput): Memory[] {

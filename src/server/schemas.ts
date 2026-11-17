@@ -142,11 +142,13 @@ export const recallShape = {
   topic: topic.optional().describe('List memories in this topic'),
   context: context
     .optional()
-    .describe("Your context: its memories rank first, other contexts' are left out"),
+    .describe(
+      "Your context: its memories come first in listings and are preferred in searches; other contexts' are left out",
+    ),
   host: thisHost
     .optional()
     .describe(
-      "This machine's name: its memories rank first, other machines' are left out. Alone, lists what is known about that machine",
+      "This machine's name: its memories come first in listings and are preferred in searches; other machines' are left out. Alone, lists what is known about that machine",
     ),
   limit: z
     .number()

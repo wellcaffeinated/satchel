@@ -335,8 +335,8 @@ Details:
   `filetypes` (rules for any file type, such as `tags: [code]`) before file-type-specific
   ones, then the caller's own context and host first, then by topic, then oldest first
   (an import keeps the order of its source), then by id.
-- **Search** (`query`) orders by relevance, ties by id, and returns at most `limit`
-  (default 8) per page.
+- **Search** (`query`) orders by relevance, ties local first then by id, and returns at
+  most `limit` (default 8) per page.
 - A page holds whole memories until `RECALL_PAGE_MAX_CHARS` (24,000) would be exceeded, or
   `limit` is reached when given (at most 100). It always holds at least one memory. When
   more remain, the page ends with
@@ -401,7 +401,11 @@ Rules are meant to arrive when the work starts, not when the agent thinks to ask
   that produced them. On startup, any memory whose stored model name differs from the
   configured one is re-embedded in the background. Similarity is brute-force cosine;
   the store is small and no vector index is wanted.
-- Ranking: reciprocal rank fusion of the FTS order and the cosine order.
+- Ranking: reciprocal rank fusion of the FTS order and the cosine order. A memory of the
+  caller's own context or machine counts as ranking 3 places higher in each list
+  (`LOCAL_RANK_BONUS`): it wins among similarly relevant results, but a weak local match
+  does not jump strong ones. (A multiplier on the fused score would not do this: fused
+  scores carry only rank, and neighbouring ranks differ by about 1%.)
 - `memorize` uses cosine similarity (or FTS when embeddings are off) on the first
   paragraph to report similar existing memories.
 

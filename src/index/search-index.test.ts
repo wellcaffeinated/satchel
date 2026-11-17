@@ -144,6 +144,24 @@ describe('search index', () => {
     db.close()
   })
 
+  it('prefers local memories in a search without lifting weak matches over strong ones', () => {
+    const index = create()
+    const onNas = { host: 'nas', scope: 'host' as const }
+    add(index, memory('m_aaaaaaaa', 'Descale the kettle on a monthly schedule.'))
+    add(index, memory('m_bbbbbbbb', 'Descale the kettle on a monthly schedule.', onNas))
+    add(index, memory('m_dddddddd', 'Descale the kettle with citric acid every month.'))
+    add(index, memory('m_eeeeeeee', 'The kettle descale schedule is on the fridge.'))
+    add(index, memory('m_ffffffff', 'Monthly: descale the kettle and the coffee machine.'))
+    add(index, memory('m_gggggggg', 'A kettle needs descaling when the water is hard.'))
+    add(index, memory('m_cccccccc', 'Backups follow a nightly schedule on this machine.', onNas))
+    const ids = (host?: string) =>
+      index.search({ query: 'descale kettle monthly schedule', host, limit: 10 }).map((m) => m.id)
+    // Equally relevant: the local copy wins. A weak local match does not jump the strong ones.
+    expect(ids('nas').slice(0, 2)).toEqual(['m_bbbbbbbb', 'm_aaaaaaaa'])
+    expect(ids('nas').indexOf('m_cccccccc')).toBeGreaterThan(2)
+    expect(ids().at(-1)).toBe('m_cccccccc')
+  })
+
   describe('pinned memories', () => {
     it('keeps the core flag and lists only what the caller may see', () => {
       const index = create()

@@ -12,6 +12,13 @@ describe('reciprocalRankFusion', () => {
     expect(order).toHaveLength(4)
   })
 
+  it('lets an item with a rank bonus count as ranking that many places higher', () => {
+    const list = ['a', 'b', 'c', 'd', 'e', 'f']
+    const scores = reciprocalRankFusion([list], { rankBonus: (id) => (id === 'f' ? 3 : 0) })
+    expect(scores.get('f')).toBe(scores.get('c'))
+    expect(scores.get('f')).toBeLessThan(scores.get('b') ?? 0)
+  })
+
   it('is empty for no lists', () => {
     expect(reciprocalRankFusion([]).size).toBe(0)
   })
