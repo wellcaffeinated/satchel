@@ -38,6 +38,35 @@ const CORE_CANDIDATES_MAX = 30
 const REVIEW_PAGE_MAX_CHARS = 24_000
 const OVERVIEW_TEXT_CHARS = 120
 
+// Limits on what one upkeep run may change, so a bad run is small and easy to undo.
+const CORE_TARGET_CHARS = Math.round(CORE_MAX_CHARS * 0.8)
+const PIN_CHANGES_MAX = 3
+const METADATA_FIXES_MAX = 5
+
+/**
+ * How to act on the report: the same for every owner, so it ships with the server. The
+ * owner's own adjustments are memories in the `memory-upkeep` topic.
+ */
+export const UPKEEP_RULES = `## How to act on this report
+These are Satchel's rules for upkeep. First recall topic "memory-upkeep": the owner's own adjustments, if any, are there and override these rules. Then read every section in full (review with section="core", "duplicates" and "unused", following each "Next page").
+
+Core: what an agent needs in every conversation and has no natural moment to look up, such as how to talk to the owner, who they are, and standing rules for any work. Not rules for one project, library or file type: those load by topic or label when the work starts.
+- Keep the core under about ${CORE_TARGET_CHARS} of its ${CORE_MAX_CHARS} characters.
+- Pin a candidate (memorize with replaces=<id> and core: true) only if it fits the line above. Use the score to rank, not to decide: read the memory. Prefer stated over inferred over imported.
+- Do not pin a labelled candidate. If it really applies to all work, its labels are wrong: clear them as a metadata fix instead.
+- Do not pin a memory about someone or something other than the owner unless it matters in every conversation.
+- Unpin (core: false) only when the core is past ${CORE_TARGET_CHARS} characters (lowest fit first) or a pinned memory is plainly obsolete. A pinned memory's use is not measured, so low use is no reason to unpin.
+- At most ${PIN_CHANGES_MAX} pin or unpin changes per run.
+
+Duplicates: report them; do not merge or forget. For each pair that really says the same thing, say which to keep (stated over inferred, then the clearer one) and give the merged first paragraph. Ignore pairs that only share a subject.
+
+Unused: usually hard to find, not useless. Never forget anything.
+- Apply metadata fixes the hints point to when they are clearly right: add or clear filetypes or tags, add about, or move the memory to a better existing topic (memorize with replaces, giving only the changed fields). Never change its text, scope or origin.
+- At most ${METADATA_FIXES_MAX} metadata fixes per run.
+- Leave the rest to the owner: topics whose trigger may need rewriting (only the owner edits topics.yaml) and memories that may be obsolete.
+
+Report to the owner in plain sentences: what changed (each id with a one-line reason); what needs them, as a numbered list; and any failure, said plainly. If nothing changed and nothing needs them, say so in one line.`
+
 export type ReviewSection = NonNullable<ReviewArgs['section']>
 
 export interface CoreFit {
@@ -361,6 +390,8 @@ export function createReviewer(options: { store: Store; render: Renderer; now: (
       ...(unused.length === 0
         ? []
         : ['In full, with hints about their metadata: review with section="unused".']),
+      '',
+      UPKEEP_RULES,
     ].join('\n')
   }
 

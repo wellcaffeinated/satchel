@@ -434,8 +434,12 @@ when the owner asks for something to be kept in mind in every conversation.
 ## Review
 
 `review` is a read-only report for upkeep. It computes; deciding what to pin, merge or
-relabel is left to its reader (the owner, or a scheduled job whose rules live in a
-reference in the store). Usage is measured over the last `USAGE_WINDOW_DAYS` (60) days
+relabel is left to its reader, the owner or a scheduled job. The overview ends with
+Satchel's rules for acting on it (`UPKEEP_RULES` in `src/server/review.ts`), the same for
+every owner: what belongs in the core, keeping it under 80% of the cap, at most 3 pin
+changes and 5 metadata fixes per run, duplicates reported but never merged, nothing
+forgotten. They tell the reader to recall the topic `memory-upkeep` first, where an
+owner's own adjustments live as memories and override them. Usage is measured over the last `USAGE_WINDOW_DAYS` (60) days
 from the recall log, leaving out `core` showings. A memory's usage is the number of
 distinct days it was looked up (`recall`, `read`, or a row older than `via`) and the
 further days on which `brief` only loaded it for the work, plus the contexts that asked.
@@ -584,8 +588,8 @@ commit message. When a real recall misses in daily use, add it as a case first.
 Not built. Listed so that nothing built now closes the door on them.
 
 - **More from the review.** `review` (see "Review") reports the core, duplicates and
-  unused memories; the job that acts on it runs outside the server, as an agent with its
-  own OAuth login (Hermes) whose rules are a reference in the store. Still to come:
+  unused memories, with the rules for acting on it; the job that acts runs outside the
+  server, as an agent with its own OAuth login (Hermes). Still to come:
   splitting oversized topics, and `last_recalled` in listings so the owner sees it too.
 - **Topic management.** Rename a topic, rewrite its trigger, merge two topics, through one
   tool or through the consolidation job. Today `topic_trigger` on an existing topic is

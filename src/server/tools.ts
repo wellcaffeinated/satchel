@@ -42,7 +42,7 @@ export const TOOL_DESCRIPTIONS = {
   checkpoint:
     'Record where work stopped on one thread of one context so a later session can resume. `context` and `thread` are what `brief` took: in a git repo the project id (host/owner/repo, else the directory name) and the branch; outside one, a short name for the undertaking ("grant-proposal") and "main" by default. Call when stopping work (end of session, hand-off, switching threads) with a 1-3 sentence summary: what is done, what is next, what blocks, and the HEAD `commit` for code. Overwrites the previous checkpoint for that thread; omitting `summary` or `commit` keeps the stored one. `done: true` deletes it once the thread is merged, finished or abandoned.',
   review:
-    'Report on the memory store for upkeep, not for normal work: the core (pinned memories, size, ranked candidates with scores), pairs of memories that may be duplicates, and memories nothing has used lately with hints about their metadata. Read-only. Call it when the user asks to tidy memory, or from a scheduled consolidation job.',
+    'Report on the memory store for upkeep, not for normal work: the core (pinned memories, size, ranked candidates with scores), pairs of memories that may be duplicates, and memories nothing has used lately with hints about their metadata. Read-only. The overview ends with how to act on it. Call it when the user asks to tidy memory, or from a scheduled upkeep job.',
 } satisfies Record<ToolName, string>
 
 const INTERNAL_ERROR_TEXT = 'Satchel hit an internal error; the operation did not complete.'

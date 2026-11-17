@@ -6,6 +6,7 @@ import {
   coreFit,
   coreScore,
   createReviewer,
+  UPKEEP_RULES,
   USAGE_WINDOW_DAYS,
   unusedHints,
   useMultiplier,
@@ -124,6 +125,14 @@ describe('review', () => {
     // Pinned, used and new memories are not unused; the old silent guess is.
     expect(text).toContain('1 memory created before 2026-09-17 that nothing has used since.')
     expect(text).toContain('- m_guessfct [general] unused: The owner probably likes tea.')
+    expect(text.endsWith(UPKEEP_RULES)).toBe(true)
+    expect(UPKEEP_RULES).toContain('under about 3200 of its 4000 characters')
+    expect(UPKEEP_RULES).toContain('First recall topic "memory-upkeep"')
+  })
+
+  it('leaves the rules out of a single section', async () => {
+    const { review } = reviewer({ memories: [GUESS] })
+    expect(await review({ section: 'unused' })).not.toContain('## How to act on this report')
   })
 
   it('lists pinned memories and scored candidates in the core section', async () => {
